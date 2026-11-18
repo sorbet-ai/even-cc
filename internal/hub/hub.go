@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 // MaxMessagesPerSession matches even-terminal's MAX_MESSAGES_PER_SESSION.

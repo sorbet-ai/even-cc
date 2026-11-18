@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"even-cc/internal/config"
-	"even-cc/internal/netaddr"
+	"github.com/sorbet-ai/even-cc/internal/config"
+	"github.com/sorbet-ai/even-cc/internal/netaddr"
 )
 
 // daemonEnv marks the detached server process.
@@ -96,7 +96,13 @@ func startCmd(args []string) error {
 		return err
 	}
 	defer f.Close()
-	cmd := exec.Command(exe, append([]string{"serve", "--no-qr"}, args...)...)
+	childArgs := []string{"serve", "--no-qr"} // the QR is printed here, once it listens
+	for _, a := range args {
+		if a != "--no-qr" && a != "-no-qr" {
+			childArgs = append(childArgs, a)
+		}
+	}
+	cmd := exec.Command(exe, childArgs...)
 	cmd.Env = append(os.Environ(), daemonEnv+"=1")
 	cmd.Stdout, cmd.Stderr = f, f
 	if wd, err := os.Getwd(); err == nil {

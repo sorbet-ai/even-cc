@@ -2,13 +2,13 @@ package claude
 
 import (
 	"encoding/json"
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"even-cc/internal/guard"
+	"github.com/sorbet-ai/even-cc/internal/guard"
 )
 
 // Prompts mid-turn, and prompts, answers, interrupts and process exits

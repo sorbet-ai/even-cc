@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"even-cc/internal/config"
+	"github.com/sorbet-ai/even-cc/internal/config"
 )
 
 func TestListenAllPortFallback(t *testing.T) {

@@ -1,4 +1,4 @@
-module even-cc
+module github.com/sorbet-ai/even-cc
 
 go 1.27.3
 

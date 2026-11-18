@@ -13,8 +13,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"even-cc/internal/events"
-	"even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/hub"
 )
 
 // Regression tests for the 2026-10-30 engineering review.

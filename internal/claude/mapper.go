@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"even-cc/internal/config"
-	"even-cc/internal/events"
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/config"
+	"github.com/sorbet-ai/even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 // Display controls what the app is sent. Event types and fields never

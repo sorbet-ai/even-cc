@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"even-cc/internal/claude"
-	"even-cc/internal/events"
-	"even-cc/internal/hub"
-	"even-cc/internal/info"
-	"even-cc/internal/transcript"
+	"github.com/sorbet-ai/even-cc/internal/claude"
+	"github.com/sorbet-ai/even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/info"
+	"github.com/sorbet-ai/even-cc/internal/transcript"
 )
 
 const token = "TOKEN0123456789abcdef0123456789ab"

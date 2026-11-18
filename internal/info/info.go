@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"even-cc/internal/claude"
-	"even-cc/internal/guard"
+	"github.com/sorbet-ai/even-cc/internal/claude"
+	"github.com/sorbet-ai/even-cc/internal/guard"
 )
 
 // Account is ordered like even-terminal's response.

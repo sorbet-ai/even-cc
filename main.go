@@ -24,20 +24,20 @@ import (
 	"syscall"
 	"time"
 
-	"even-cc/internal/claude"
-	"even-cc/internal/config"
-	"even-cc/internal/hub"
-	"even-cc/internal/info"
-	"even-cc/internal/logfile"
-	"even-cc/internal/mirror"
-	"even-cc/internal/netaddr"
-	"even-cc/internal/qrterm"
-	"even-cc/internal/server"
-	"even-cc/internal/transcript"
+	"github.com/sorbet-ai/even-cc/internal/claude"
+	"github.com/sorbet-ai/even-cc/internal/config"
+	"github.com/sorbet-ai/even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/info"
+	"github.com/sorbet-ai/even-cc/internal/logfile"
+	"github.com/sorbet-ai/even-cc/internal/mirror"
+	"github.com/sorbet-ai/even-cc/internal/netaddr"
+	"github.com/sorbet-ai/even-cc/internal/qrterm"
+	"github.com/sorbet-ai/even-cc/internal/server"
+	"github.com/sorbet-ai/even-cc/internal/transcript"
 )
 
-// Version of even-cc.
-const Version = "0.1.0"
+// Version is set at release build time (-ldflags "-X main.Version=v1.2.3").
+var Version = "dev"
 
 func usage() {
 	fmt.Fprint(os.Stderr, `even-cc `+Version+` — Claude Code on Even G2 glasses, through Faceclaw

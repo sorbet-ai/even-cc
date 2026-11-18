@@ -1,0 +1,47 @@
+# Builds even-cc for every platform and publishes a GitHub release when a
+# version tag (v1.2.3) is pushed. install.sh / install.ps1 download from the
+# latest release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./... -count=1
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            dir=build/even-cc_${os}_${arch}
+            mkdir -p "$dir"
+            exe=even-cc; [ "$os" = windows ] && exe=even-cc.exe
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.Version=$VERSION" -o "$dir/$exe" .
+            cp README.md LICENSE* "$dir/" 2>/dev/null || true
+            if [ "$os" = windows ]; then
+              (cd "$dir" && zip -q -r "../../dist/even-cc_${os}_${arch}.zip" .)
+            else
+              tar -C "$dir" -czf "dist/even-cc_${os}_${arch}.tar.gz" .
+            fi
+          done
+          (cd dist && sha256sum * > checksums.txt)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --title "${{ github.ref_name }}" --generate-notes

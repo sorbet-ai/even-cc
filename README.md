@@ -2,7 +2,7 @@
 
 Claude Code on Even Realities G2 glasses, through [Faceclaw](https://github.com/jimrandomh/faceclaw).
 even-cc is a single binary that runs next to your Claude Code on a machine and serves it to the **Claude
-Code app** in our Faceclaw build (the `claude-code` branch of `../faceclaw`):
+Code app** in our Faceclaw build (the default branch of [sorbet-ai/faceclaw](https://github.com/sorbet-ai/faceclaw)):
 
 - your sessions and their live events, prompts, permission and question answers
   (see `docs/even-protocol.md` for the HTTP API, `docs/claude-protocol.md` for how it drives `claude`);
@@ -17,15 +17,22 @@ on the `even-app` branch.
 1. **Faceclaw.** Install our Faceclaw build on the Android phone (`../faceclaw`, see its README for
    building; it replaces the official app, so export settings first with `scripts/pull_config.sh`).
    Pair the glasses in it.
-2. **even-cc.** Build (Go 1.27+) and put it on `PATH`:
+2. **even-cc.** Install it on the machine that runs Claude Code (macOS, Linux or Windows; Claude
+   Code must be installed and logged in):
 
    ```sh
-   go build -o even-cc.exe .                       # Windows
-   GOOS=linux GOARCH=amd64 go build -o even-cc .   # Linux / WSL
+   curl -fsSL https://raw.githubusercontent.com/sorbet-ai/even-cc/main/install.sh | sh   # macOS, Linux, WSL
    ```
 
-   Run `even-cc` (same as `even-cc serve`). The first run writes `~/.even-cc/config.json` with a
-   random token.
+   ```powershell
+   irm https://raw.githubusercontent.com/sorbet-ai/even-cc/main/install.ps1 | iex      # Windows
+   ```
+
+   Or with Go 1.27+: `go install github.com/sorbet-ai/even-cc@latest`.
+
+   Then `even-cc start` runs it in the background and prints the setup QR code; `even-cc stop` stops
+   it and `even-cc status` says whether it runs. `even-cc` alone runs it in the terminal instead. The
+   first run writes `~/.even-cc/config.json` with a random token.
 3. **Add the machine.** even-cc prints a QR code. On the glasses, in Claude Code: tap > Settings > Machines >
    **Add machine**, and scan it with the phone. That adds the machine, points Faceclaw's voice at its Whisper
    proxy (if `sttUrl` is set) and adds its terminal mirror to the Terminal app. `even-cc pair` prints
@@ -155,6 +162,10 @@ stopping it stops what it started; on Windows, even-cc dying takes claude down w
 handler is logged and the server keeps serving; an unrecoverable crash goes to `even-cc.crash.log`.
 
 ## Development
+
+Build from source with `go build .` (no C toolchain needed; `GOOS`/`GOARCH` cross-compile).
+Pushing a `v*` tag builds every platform and publishes a GitHub release
+(`.github/workflows/release.yml`), which the install scripts download.
 
 ```sh
 go vet ./... && go test ./...

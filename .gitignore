@@ -3,3 +3,7 @@ bin/
 .test/
 transcript-wsl-session.jsonl
 session.md
+/even-cc
+/even-cc.exe
+/dist/
+/build/

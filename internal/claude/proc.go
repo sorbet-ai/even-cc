@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"even-cc/internal/guard"
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/guard"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 // procTree stops claude together with everything it started (proc_unix.go,

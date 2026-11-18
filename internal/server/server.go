@@ -20,12 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"even-cc/internal/claude"
-	"even-cc/internal/guard"
-	"even-cc/internal/hub"
-	"even-cc/internal/info"
-	"even-cc/internal/jsonx"
-	"even-cc/internal/transcript"
+	"github.com/sorbet-ai/even-cc/internal/claude"
+	"github.com/sorbet-ai/even-cc/internal/guard"
+	"github.com/sorbet-ai/even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/info"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/transcript"
 )
 
 // maxBody caps request bodies.

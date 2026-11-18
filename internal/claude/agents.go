@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/events"
 )
 
 // agentLine is the single display line of one subagent (Agent tool call),

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"unicode"
 
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 // SessionInfo is one row of the session list.

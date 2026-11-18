@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"even-cc/internal/hub"
-	"even-cc/internal/jsonx"
-	"even-cc/internal/transcript"
+	"github.com/sorbet-ai/even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/transcript"
 )
 
 // fakeProc records what the session writes to the CLI.

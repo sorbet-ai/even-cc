@@ -7,9 +7,9 @@ import (
 	"io"
 	"log/slog"
 
-	"even-cc/internal/claude"
-	"even-cc/internal/hub"
-	"even-cc/internal/transcript"
+	"github.com/sorbet-ai/even-cc/internal/claude"
+	"github.com/sorbet-ai/even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/transcript"
 )
 
 func main() {

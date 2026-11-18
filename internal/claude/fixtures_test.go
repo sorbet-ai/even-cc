@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"even-cc/internal/events"
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 const testdata = "../../testdata"

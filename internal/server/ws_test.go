@@ -8,7 +8,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/events"
 )
 
 func TestWebSocketEvents(t *testing.T) {

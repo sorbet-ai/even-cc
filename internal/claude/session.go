@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode"
 
-	"even-cc/internal/events"
-	"even-cc/internal/guard"
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/guard"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 // procHandle is the part of *Proc a Session uses (faked in tests).

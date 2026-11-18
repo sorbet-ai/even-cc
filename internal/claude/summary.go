@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"even-cc/internal/jsonx"
+	"github.com/sorbet-ai/even-cc/internal/jsonx"
 )
 
 // toolInput is a decoded tool input with JS-like accessors.

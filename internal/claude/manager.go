@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"even-cc/internal/events"
-	"even-cc/internal/guard"
-	"even-cc/internal/hub"
-	"even-cc/internal/transcript"
+	"github.com/sorbet-ai/even-cc/internal/events"
+	"github.com/sorbet-ai/even-cc/internal/guard"
+	"github.com/sorbet-ai/even-cc/internal/hub"
+	"github.com/sorbet-ai/even-cc/internal/transcript"
 )
 
 // DefaultAutoAllowedTools is even-terminal's list (passed as --allowedTools,
