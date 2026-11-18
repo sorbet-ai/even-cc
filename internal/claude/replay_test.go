@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -140,10 +141,26 @@ func (h *harness) waitLaunch() *launched {
 
 func (h *harness) feed(line []byte) { h.cur.onLine(line) }
 
+// rawEvents returns the session's buffered events, as a replaying client
+// gets them.
+func (h *harness) rawEvents() [][]byte {
+	c := h.hub.Subscribe(h.sid, true)
+	defer h.hub.Unsubscribe(h.sid, c)
+	out := make([][]byte, 0, len(c.C))
+	for n := len(c.C); n > 0; n-- {
+		out = append(out, <-c.C)
+	}
+	return out
+}
+
 // events returns all events emitted for the session.
 func (h *harness) events() []map[string]any {
 	var list []map[string]any
-	_ = json.Unmarshal(h.hub.Messages(h.sid, 0), &list)
+	for _, b := range h.rawEvents() {
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		list = append(list, m)
+	}
 	return list
 }
 
@@ -388,8 +405,8 @@ func TestReplayAskUserQuestion(t *testing.T) {
 	if got := string(jsonx.Marshal(q["questions"])); got != `[{"header":"Color","multiSelect":false,"options":[{"description":"Pick red","label":"Red","preview":""},{"description":"Pick green","label":"Green","preview":""},{"description":"Pick blue","label":"Blue","preview":""}],"question":"Pick a color?"}]` {
 		t.Errorf("questions %s", got)
 	}
-	raw := h.hub.Messages(h.sid, 0)
-	if !strings.Contains(string(raw), `{"type":"question_answer","answers":{"Pick a color?":"Green"}}`[1:]) {
+	raw := bytes.Join(h.rawEvents(), nil)
+	if !strings.Contains(string(raw), `{"type":"question_answer","answers":{"Pick a color?":"Green"}}`) {
 		t.Errorf("question_answer missing")
 	}
 	var reply string

@@ -4,6 +4,11 @@ This is the contract between the Even Realities phone app ("Terminal Mode", G2 g
 server `@evenrealities/even-terminal`. It's written so we can build a drop-in Go replacement
 (`even-cc`) that serves **Claude Code only**.
 
+> **even-cc today** serves only Faceclaw's Claude Code app, which follows a session over
+> `GET /api/ws` (one JSON event per message, `needReplay=true` for the buffered ones). The SSE
+> stream (`/api/events`, §4), `/api/status`, `/api/messages` and the event ids persisted across
+> restarts were removed from even-cc; this document still describes even-terminal's protocol.
+
 **Sources:**
 
 - **Code:** `@evenrealities/even-terminal` **0.10.5**, compiled JS in

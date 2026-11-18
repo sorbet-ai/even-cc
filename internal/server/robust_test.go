@@ -1,8 +1,8 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"even-cc/internal/events"
 	"even-cc/internal/hub"
@@ -64,28 +66,25 @@ func TestHandlerPanicRecovered(t *testing.T) {
 
 // Clients that vanish mid-stream (or never read) are dropped without
 // blocking or breaking emits to the others.
-func TestSSEClientDisconnectMidStream(t *testing.T) {
+func TestWSClientDisconnectMidStream(t *testing.T) {
 	e := newEnv(t)
-	open := func() (*http.Response, *bufio.Reader) {
-		resp, err := http.Get(e.srv.URL + "/api/events?token=" + token + "&sessionId=s1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	open := func() *websocket.Conn {
+		c, _, err := websocket.Dial(ctx, wsURL(e.srv.URL, "sessionId=s1"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := bufio.NewReader(resp.Body)
-		if l, _ := r.ReadString('\n'); l != ":ok\n" {
-			t.Fatalf("first line %q", l)
-		}
-		r.ReadString('\n')
-		return resp, r
+		return c
 	}
-	gone, _ := open()
-	keep, kr := open()
-	defer keep.Body.Close()
+	gone := open()
+	keep := open()
+	defer keep.CloseNow()
 	deadline := time.Now().Add(2 * time.Second)
 	for e.hub.ClientCount() != 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	gone.Body.Close() // disconnect mid-stream
+	gone.CloseNow() // disconnect mid-stream
 	var wg sync.WaitGroup
 	for g := 0; g < 4; g++ {
 		wg.Add(1)
@@ -102,13 +101,10 @@ func TestSSEClientDisconnectMidStream(t *testing.T) {
 	go func() {
 		defer close(done)
 		for got < 2000 {
-			l, err := kr.ReadString('\n')
-			if err != nil {
+			if _, _, err := keep.Read(ctx); err != nil {
 				return
 			}
-			if strings.HasPrefix(l, "data: ") {
-				got++
-			}
+			got++
 		}
 	}()
 	wg.Wait()

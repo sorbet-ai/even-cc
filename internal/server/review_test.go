@@ -1,9 +1,8 @@
 package server
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,41 +11,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"even-cc/internal/events"
 	"even-cc/internal/hub"
 )
 
 // Regression tests for the 2026-10-30 engineering review.
 
-// An SSE stream outlives the server's read and write timeouts (which bound
+func wsURL(base, query string) string {
+	return "ws" + strings.TrimPrefix(base, "http") + "/api/ws?token=" + token + "&" + query
+}
+
+// A WebSocket outlives the server's read and write timeouts (which bound
 // ordinary requests) and its own per-write timeout, as long as the phone
-// keeps reading: every write (heartbeats too) extends the deadline.
-func TestSSEOutlivesServerTimeouts(t *testing.T) {
-	SSEWriteTimeout, HeartbeatInterval = 200*time.Millisecond, 50*time.Millisecond
-	defer func() { SSEWriteTimeout, HeartbeatInterval = 30*time.Second, 15*time.Second }()
+// keeps answering pings.
+func TestWSOutlivesServerTimeouts(t *testing.T) {
+	WriteTimeout, HeartbeatInterval = 200*time.Millisecond, 50*time.Millisecond
+	defer func() { WriteTimeout, HeartbeatInterval = 30*time.Second, 15*time.Second }()
 	e := newEnv(t)
 	srv := httptest.NewUnstartedServer(e.s)
 	srv.Config.ReadTimeout = 150 * time.Millisecond
 	srv.Config.WriteTimeout = 150 * time.Millisecond
 	srv.Start()
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/api/events?token=" + token + "&sessionId=s1")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, wsURL(srv.URL, "sessionId=s1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	r := bufio.NewReader(resp.Body)
-	r.ReadString('\n')
-	r.ReadString('\n')
+	defer c.CloseNow()
 	got := make(chan string, 1)
-	go func() {
-		for {
-			l, err := r.ReadString('\n') // heartbeats, then the event
-			if err != nil || strings.HasPrefix(l, "data: ") {
-				got <- l
-				return
-			}
+	go func() { // reading also answers the pings
+		_, b, err := c.Read(ctx)
+		if err != nil {
+			got <- err.Error()
+			return
 		}
+		got <- string(b)
 	}()
 	time.Sleep(600 * time.Millisecond) // past all three timeouts
 	e.hub.Emit("s1", events.TextDelta{Type: "text_delta", Text: "late"})
@@ -56,25 +59,31 @@ func TestSSEOutlivesServerTimeouts(t *testing.T) {
 			t.Errorf("got %q", l)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("stream died at the server timeouts")
+		t.Fatal("connection died at the server timeouts")
 	}
 }
 
 // A client that stops reading is dropped once its queue passes the byte cap
-// or a write blocks past SSEWriteTimeout; emits never block.
-func TestSSEStalledClientDropped(t *testing.T) {
-	SSEWriteTimeout = 300 * time.Millisecond
-	defer func() { SSEWriteTimeout = 30 * time.Second }()
+// or a write blocks past WriteTimeout; emits never block.
+func TestWSStalledClientDropped(t *testing.T) {
+	WriteTimeout = 300 * time.Millisecond
+	defer func() { WriteTimeout = 30 * time.Second }()
 	e := newEnv(t)
-	c, err := net.Dial("tcp", strings.TrimPrefix(e.srv.URL, "http://"))
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetReadBuffer(4096)
+		}
+		return c, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, wsURL(e.srv.URL, "sessionId=s1"), &websocket.DialOptions{
+		HTTPClient: &http.Client{Transport: &http.Transport{DialContext: dial}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetReadBuffer(4096)
-	}
-	io.WriteString(c, "GET /api/events?token="+token+"&sessionId=s1 HTTP/1.1\r\nHost: x\r\n\r\n")
+	defer c.CloseNow() // never reads
 	deadline := time.Now().Add(2 * time.Second)
 	for e.hub.ClientCount() != 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -99,13 +108,13 @@ func TestHealthEndpoint(t *testing.T) {
 	e := newEnv(t)
 	st, _, body := e.do("GET", "/api/ecc/health", "", nil)
 	var h struct {
-		Version    string            `json:"version"`
-		Pid        int               `json:"pid"`
-		Sessions   []json.RawMessage `json:"sessions"`
-		SSEClients *int              `json:"sseClients"`
-		Panics     *int64            `json:"panics"`
+		Version  string            `json:"version"`
+		Pid      int               `json:"pid"`
+		Sessions []json.RawMessage `json:"sessions"`
+		Clients  *int              `json:"clients"`
+		Panics   *int64            `json:"panics"`
 	}
-	if st != 200 || json.Unmarshal([]byte(body), &h) != nil || h.Version != "0.1.0" || h.Pid == 0 || h.Sessions == nil || h.SSEClients == nil || h.Panics == nil {
+	if st != 200 || json.Unmarshal([]byte(body), &h) != nil || h.Version != "0.1.0" || h.Pid == 0 || h.Sessions == nil || h.Clients == nil || h.Panics == nil {
 		t.Errorf("health %d %s", st, body)
 	}
 	if st, _, _ := e.do("GET", "/api/ecc/health", "", map[string]string{}); st != 401 {
@@ -147,9 +156,7 @@ func TestRingBufferCappedDuringLongTurn(t *testing.T) {
 	for i := 0; i < 6000; i++ {
 		h.Emit("s", events.TextDelta{Type: "text_delta", Text: "x"})
 	}
-	var all []map[string]any
-	_ = json.Unmarshal(h.Messages("s", 0), &all)
-	if len(all) != 5000 {
+	if all := buffered(h, "s"); len(all) != 5000 {
 		t.Errorf("retained %d during the turn", len(all))
 	}
 }

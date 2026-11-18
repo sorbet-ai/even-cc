@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"time"
@@ -9,9 +8,17 @@ import (
 	"github.com/coder/websocket"
 )
 
-// ws is GET /api/ws: the same live events as /api/events, one JSON event per
-// WebSocket text message, for clients without EventSource (Glassly miniapps
-// get fetch and WebSocket only). Auth is the token query parameter, as for SSE.
+// HeartbeatInterval between WebSocket pings.
+var HeartbeatInterval = 15 * time.Second
+
+// WriteTimeout bounds each WebSocket write and ping: a phone that vanished
+// from the network is dropped after this, not after the TCP retransmission
+// timeout.
+var WriteTimeout = 30 * time.Second
+
+// ws is GET /api/ws: a session's live events, one JSON event per WebSocket
+// text message; needReplay=true sends the buffered ones first. Auth is the
+// token query parameter.
 func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	sid := r.URL.Query().Get("sessionId")
 	if sid == "" {
@@ -19,7 +26,7 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The token is the authentication; native WebSocket bridges send odd or
-	// no Origin headers, so origins are not checked (as for SSE).
+	// no Origin headers, so origins are not checked.
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		s.Log.Info("ws: upgrade failed", "err", err, "remote", r.RemoteAddr)
@@ -36,7 +43,7 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		s.Log.Info("ws disconnected", "session", sid, "why", why, "clients", s.Hub.ClientCount()-1)
 	}()
 	send := func(msg []byte) bool {
-		wctx, cancel := context.WithTimeout(ctx, SSEWriteTimeout)
+		wctx, cancel := context.WithTimeout(ctx, WriteTimeout)
 		defer cancel()
 		if err := c.Write(wctx, websocket.MessageText, msg); err != nil {
 			why = "write failed: " + err.Error()
@@ -50,18 +57,18 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case frame, ok := <-client.C:
+		case ev, ok := <-client.C:
 			if !ok {
 				why = "dropped by the server (too slow)"
 				c.Close(websocket.StatusTryAgainLater, "too slow")
 				return
 			}
-			client.Took(frame)
-			if !send(frameData(frame)) {
+			client.Took(ev)
+			if !send(ev) {
 				return
 			}
 		case <-hb.C:
-			pctx, cancel := context.WithTimeout(ctx, SSEWriteTimeout)
+			pctx, cancel := context.WithTimeout(ctx, WriteTimeout)
 			err := c.Ping(pctx)
 			cancel()
 			if err != nil {
@@ -70,13 +77,4 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-}
-
-// frameData extracts the JSON payload from an SSE frame made by hub.Frame.
-func frameData(frame []byte) []byte {
-	i := bytes.Index(frame, []byte("\ndata: "))
-	if i < 0 {
-		return frame
-	}
-	return bytes.TrimSuffix(frame[i+len("\ndata: "):], []byte("\n\n"))
 }

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -139,11 +138,8 @@ func TestStaticResponses(t *testing.T) {
 	}{
 		{"GET", "/api/sessions?provider=bogus", "", 400, "error.unsupported-provider.400.json"},
 		{"POST", "/api/prompt", `{"text":"x","provider":"bogus"}`, 400, "error.unsupported-provider.400.json"},
-		{"GET", "/api/events", "", 400, "error.events-missing-sessionId.400.json"},
+		{"GET", "/api/ws", "", 400, "error.events-missing-sessionId.400.json"},
 		{"GET", "/api/sessions/nope/history?limit=10&provider=claude", "", 200, "history.unknown-session.200.json"},
-		{"GET", "/api/messages?sessionId=nope", "", 200, "messages.unknown-session.200.json"},
-		{"GET", "/api/status", "", 400, "error.missing-sessionId.400.json"},
-		{"GET", "/api/status?sessionId=" + e.sid, "", 404, "error.session-not-found.404.json"},
 		{"POST", "/api/prompt", `{"sessionId":"x"}`, 400, "error.missing-text.400.json"},
 		{"POST", "/api/prompt", `{"sessionId":"00000000-0000-4000-8000-000000000000","text":"hi","provider":"claude"}`, 404, "error.prompt-session-not-found.404.json"},
 		{"POST", "/api/permission-response", `{"decision":"allow"}`, 400, "error.missing-sessionId.400.json"},
@@ -208,19 +204,20 @@ func TestPromptLifecycleWithoutClaude(t *testing.T) {
 		t.Fatalf("prompt %d %s", st, body)
 	}
 	deadline := time.Now().Add(3 * time.Second)
-	var msgs string
+	var evs string
 	for time.Now().Before(deadline) {
-		_, _, msgs = e.do("GET", "/api/messages?sessionId="+e.sid, "", nil)
-		if strings.Contains(msgs, `"state":"idle","sessionId"`) && strings.Contains(msgs, `"idle"`) && strings.Contains(msgs, `"type":"error"`) {
+		evs = string(bytes.Join(buffered(e.hub, e.sid), []byte(",")))
+		if strings.Contains(evs, `"type":"error"`) && strings.HasSuffix(evs, `{"type":"status","state":"idle","sessionId":"`+e.sid+`","provider":"claude"}`) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !strings.HasPrefix(msgs, `{"messages":[{"id":1,"type":"user_prompt","text":"hi"}`) || !strings.Contains(msgs, `"type":"error"`) || !strings.HasSuffix(msgs, `"state":"idle","sessionId":"`+e.sid+`","provider":"claude"}`) {
-		t.Errorf("messages %s", msgs)
+	if !strings.HasPrefix(evs, `{"type":"user_prompt","text":"hi"}`) || !strings.Contains(evs, `"type":"error"`) || !strings.HasSuffix(evs, `{"type":"status","state":"idle","sessionId":"`+e.sid+`","provider":"claude"}`) {
+		t.Errorf("events %s", evs)
 	}
-	st, _, body = e.do("GET", "/api/status?sessionId="+e.sid, "", nil)
-	expect(t, st, body, 200, fixture(t, "status.200.json"))
+	if st := e.s.Mgr.StatusOf(e.sid); st != "idle" {
+		t.Errorf("state %s", st)
+	}
 	st, _, body = e.do("POST", "/api/permission-response", `{"sessionId":"`+e.sid+`","decision":"allow","provider":"claude"}`, nil)
 	expect(t, st, body, 400, fixture(t, "error.permission-not-pending.400.json"))
 	st, _, body = e.do("POST", "/api/question-response", `{"sessionId":"`+e.sid+`","answer":"x"}`, nil)
@@ -229,58 +226,28 @@ func TestPromptLifecycleWithoutClaude(t *testing.T) {
 	expect(t, st, body, 200, fixture(t, "ok.200.json"))
 }
 
-func TestSSEFramingAndReplay(t *testing.T) {
-	e := newEnv(t)
-	HeartbeatInterval = 50 * time.Millisecond
-	defer func() { HeartbeatInterval = 15 * time.Second }()
-	e.hub.Emit("s1", events.TextDelta{Type: "text_delta", Text: "a<b>& "})
-	resp, err := http.Get(e.srv.URL + "/api/events?token=" + token + "&sessionId=s1&needReplay=true")
-	if err != nil {
-		t.Fatal(err)
+// buffered returns a session's buffered events, as a replaying client gets
+// them.
+func buffered(h *hub.Hub, sid string) [][]byte {
+	c := h.Subscribe(sid, true)
+	defer h.Unsubscribe(sid, c)
+	out := make([][]byte, 0, len(c.C))
+	for n := len(c.C); n > 0; n-- {
+		out = append(out, <-c.C)
 	}
-	defer resp.Body.Close()
-	if resp.Header.Get("Content-Type") != "text/event-stream" || resp.Header.Get("Cache-Control") != "no-cache" || resp.Header.Get("X-Accel-Buffering") != "no" {
-		t.Errorf("headers %v", resp.Header)
-	}
-	r := bufio.NewReader(resp.Body)
-	read := func(n int) string {
-		var b bytes.Buffer
-		for i := 0; i < n; i++ {
-			l, err := r.ReadString('\n')
-			if err != nil {
-				t.Fatal(err)
-			}
-			b.WriteString(l)
+	return out
+}
+
+func bufferedTypes(h *hub.Hub, sid string) []string {
+	var out []string
+	for _, b := range buffered(h, sid) {
+		var ev struct {
+			Type string `json:"type"`
 		}
-		return b.String()
+		_ = json.Unmarshal(b, &ev)
+		out = append(out, ev.Type)
 	}
-	if got := read(2); got != ":ok\n\n" {
-		t.Fatalf("first frame %q", got)
-	}
-	if got := read(3); got != "id: 1\ndata: {\"type\":\"text_delta\",\"text\":\"a<b>& \"}\n\n" {
-		t.Errorf("replay frame %q", got)
-	}
-	e.hub.Emit("s1", events.NewStatus("idle", "s1"))
-	if got := read(3); got != `id: 2`+"\n"+`data: {"type":"status","state":"idle","sessionId":"s1","provider":"claude"}`+"\n\n" {
-		t.Errorf("live frame %q", got)
-	}
-	if got := read(2); got != ":heartbeat\n\n" {
-		t.Errorf("heartbeat %q", got)
-	}
-	// no replay without needReplay
-	resp2, err := http.Get(e.srv.URL + "/api/events?sessionId=s1&token=" + token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp2.Body.Close()
-	r2 := bufio.NewReader(resp2.Body)
-	l1, _ := r2.ReadString('\n')
-	l2, _ := r2.ReadString('\n')
-	e.hub.Emit("s1", events.TextDelta{Type: "text_delta", Text: "x"})
-	l3, _ := r2.ReadString('\n')
-	if l1+l2 != ":ok\n\n" || l3 != "id: 3\n" {
-		t.Errorf("no-replay stream %q %q", l1+l2, l3)
-	}
+	return out
 }
 
 func TestRingBufferKeepsActiveTurn(t *testing.T) {
@@ -289,16 +256,13 @@ func TestRingBufferKeepsActiveTurn(t *testing.T) {
 	for i := 0; i < 600; i++ {
 		h.Emit("s", events.TextDelta{Type: "text_delta", Text: "x"})
 	}
-	var all []map[string]any
-	_ = json.Unmarshal(h.Messages("s", 0), &all)
-	if len(all) != 601 || all[0]["type"] != "user_prompt" {
+	if all := bufferedTypes(h, "s"); len(all) != 601 || all[0] != "user_prompt" {
 		t.Errorf("active turn trimmed: %d", len(all))
 	}
 	h.Emit("s", events.NewStatus("idle", "s"))
 	h.Emit("s", events.TextDelta{Type: "text_delta", Text: "y"})
-	_ = json.Unmarshal(h.Messages("s", 0), &all)
-	if len(all) != 500 || all[0]["id"].(float64) != 104 {
-		t.Errorf("after idle: %d first %v", len(all), all[0]["id"])
+	if all := bufferedTypes(h, "s"); len(all) != 500 || all[0] != "text_delta" || all[498] != "status" {
+		t.Errorf("after idle: %d %v", len(all), all[:1])
 	}
 }
 

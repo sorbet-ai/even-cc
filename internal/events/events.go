@@ -1,4 +1,4 @@
-// Package events defines the app-facing SSE event shapes. Field order matches
+// Package events defines the app-facing event shapes. Field order matches
 // even-terminal's JSON key order exactly (docs/even-protocol.md §5).
 package events
 

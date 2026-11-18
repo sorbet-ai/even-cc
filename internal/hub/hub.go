@@ -1,13 +1,11 @@
 // Package hub keeps the per-session event ring buffer and fans events out to
-// SSE clients (docs/even-protocol.md §4.3).
+// WebSocket clients (/api/ws).
 package hub
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -17,7 +15,7 @@ import (
 // MaxMessagesPerSession matches even-terminal's MAX_MESSAGES_PER_SESSION.
 const MaxMessagesPerSession = 500
 
-// clientBuffer is how many frames a slow client may lag before it is dropped.
+// clientBuffer is how many events a slow client may lag before it is dropped.
 const clientBuffer = 4096
 
 // clientMaxBytes caps the bytes queued for one client; a client that lags
@@ -29,36 +27,35 @@ const clientMaxBytes = 8 << 20
 const maxRetained = 5000
 
 type entry struct {
-	id   int64
+	seq  int64 // position in the session's stream, for trimming
 	data []byte
 }
 
 type sessionBuf struct {
 	entries         []entry
 	clients         map[*Client]struct{}
-	nextID          int64
+	nextSeq         int64
 	activeTurnStart int64 // 0 = none
-	reserved        int64 // ids up to this are recorded in the id state file
 }
 
-// Client is one SSE connection. The reader calls Took for every frame it
+// Client is one live connection. The reader calls Took for every event it
 // takes from C.
 type Client struct {
-	C      chan []byte // complete SSE frames
+	C      chan []byte // one JSON event each
 	once   sync.Once
 	queued atomic.Int64 // bytes in C
 }
 
-// Took records that frame left the queue.
-func (c *Client) Took(frame []byte) { c.queued.Add(-int64(len(frame))) }
+// Took records that ev left the queue.
+func (c *Client) Took(ev []byte) { c.queued.Add(-int64(len(ev))) }
 
-func (c *Client) offer(frame []byte) bool {
-	if c.queued.Load()+int64(len(frame)) > clientMaxBytes {
+func (c *Client) offer(ev []byte) bool {
+	if c.queued.Load()+int64(len(ev)) > clientMaxBytes {
 		return false
 	}
 	select {
-	case c.C <- frame:
-		c.queued.Add(int64(len(frame)))
+	case c.C <- ev:
+		c.queued.Add(int64(len(ev)))
 		return true
 	default:
 		return false
@@ -72,7 +69,6 @@ type Hub struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionBuf
 	log      *slog.Logger
-	ids      *idState // nil = ids start at 1 per session (even-terminal)
 }
 
 func New(log *slog.Logger) *Hub {
@@ -82,32 +78,17 @@ func New(log *slog.Logger) *Hub {
 func (h *Hub) get(id string) *sessionBuf {
 	s := h.sessions[id]
 	if s == nil {
-		s = &sessionBuf{clients: map[*Client]struct{}{}, nextID: 1}
-		if h.ids != nil {
-			s.nextID = h.ids.first(id)
-			s.reserved = s.nextID - 1
-		}
+		s = &sessionBuf{clients: map[*Client]struct{}{}, nextSeq: 1}
 		h.sessions[id] = s
 	}
 	return s
 }
 
-// Frame renders one SSE event frame.
-func Frame(id int64, data []byte) []byte {
-	b := make([]byte, 0, len(data)+24)
-	b = append(b, "id: "...)
-	b = strconv.AppendInt(b, id, 10)
-	b = append(b, "\ndata: "...)
-	b = append(b, data...)
-	b = append(b, "\n\n"...)
-	return b
-}
-
 // Emit buffers ev for sessionID and sends it to every connected client.
 // Events for an empty session id are dropped, as in even-terminal.
-func (h *Hub) Emit(sessionID string, ev any) int64 {
+func (h *Hub) Emit(sessionID string, ev any) {
 	if sessionID == "" {
-		return 0
+		return
 	}
 	data := jsonx.Marshal(ev)
 	var head struct {
@@ -119,28 +100,24 @@ func (h *Hub) Emit(sessionID string, ev any) int64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s := h.get(sessionID)
-	id := s.nextID
-	s.nextID++
-	if h.ids != nil && id > s.reserved {
-		s.reserved = id + idBlock - 1
-		h.ids.reserve(sessionID, s.reserved, h.log)
-	}
-	s.entries = append(s.entries, entry{id: id, data: data})
+	seq := s.nextSeq
+	s.nextSeq++
+	s.entries = append(s.entries, entry{seq: seq, data: data})
 	if head.Type == "user_prompt" && s.activeTurnStart == 0 {
-		s.activeTurnStart = id
+		s.activeTurnStart = seq
 	}
 	if head.Type == "status" && head.State == "busy" && s.activeTurnStart == 0 {
-		s.activeTurnStart = id
+		s.activeTurnStart = seq
 	}
 	if head.Type == "status" && head.State == "idle" {
 		s.activeTurnStart = 0
 	}
-	retainFrom := id - MaxMessagesPerSession + 1
+	retainFrom := seq - MaxMessagesPerSession + 1
 	if s.activeTurnStart != 0 && s.activeTurnStart < retainFrom {
-		retainFrom = max(s.activeTurnStart, id-maxRetained+1)
+		retainFrom = max(s.activeTurnStart, seq-maxRetained+1)
 	}
 	drop := 0
-	for drop < len(s.entries) && s.entries[drop].id < retainFrom {
+	for drop < len(s.entries) && s.entries[drop].seq < retainFrom {
 		drop++
 	}
 	if drop > 0 {
@@ -148,25 +125,20 @@ func (h *Hub) Emit(sessionID string, ev any) int64 {
 	}
 
 	if h.log != nil && h.log.Enabled(context.Background(), slog.LevelDebug) {
-		h.log.Debug("sse", "session", sessionID, "id", id, "data", string(jsonx.TruncateBytes(string(data), 4000)))
+		h.log.Debug("event", "session", sessionID, "data", string(jsonx.TruncateBytes(string(data), 4000)))
 	}
-	if len(s.clients) == 0 {
-		return id
-	}
-	frame := Frame(id, data)
 	for c := range s.clients {
-		if !c.offer(frame) {
+		if !c.offer(data) {
 			delete(s.clients, c)
 			c.close()
 			if h.log != nil {
-				h.log.Warn("sse client too slow, dropped", "session", sessionID, "queuedBytes", c.queued.Load(), "queuedFrames", len(c.C))
+				h.log.Warn("client too slow, dropped", "session", sessionID, "queuedBytes", c.queued.Load(), "queuedEvents", len(c.C))
 			}
 		}
 	}
-	return id
 }
 
-// Subscribe attaches a client. With replay, all buffered frames are queued
+// Subscribe attaches a client. With replay, all buffered events are queued
 // first (atomically with attaching, so nothing is lost or duplicated).
 func (h *Hub) Subscribe(sessionID string, replay bool) *Client {
 	h.mu.Lock()
@@ -179,9 +151,8 @@ func (h *Hub) Subscribe(sessionID string, replay bool) *Client {
 	c := &Client{C: make(chan []byte, n)}
 	if replay {
 		for _, e := range s.entries {
-			f := Frame(e.id, e.data)
-			c.queued.Add(int64(len(f)))
-			c.C <- f
+			c.queued.Add(int64(len(e.data)))
+			c.C <- e.data
 		}
 	}
 	s.clients[c] = struct{}{}
@@ -223,35 +194,4 @@ func (h *Hub) ClientCount() int {
 		n += len(s.clients)
 	}
 	return n
-}
-
-// Messages returns buffered events with id > after as a JSON array of
-// {"id":N, ...event} objects (id first, as in /api/messages).
-func (h *Hub) Messages(sessionID string, after int64) []byte {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	var buf bytes.Buffer
-	buf.WriteByte('[')
-	first := true
-	if s := h.sessions[sessionID]; s != nil {
-		for _, e := range s.entries {
-			if e.id <= after {
-				continue
-			}
-			if !first {
-				buf.WriteByte(',')
-			}
-			first = false
-			buf.WriteString(`{"id":`)
-			buf.WriteString(strconv.FormatInt(e.id, 10))
-			if len(e.data) > 2 {
-				buf.WriteByte(',')
-				buf.Write(e.data[1:])
-			} else {
-				buf.WriteByte('}')
-			}
-		}
-	}
-	buf.WriteByte(']')
-	return buf.Bytes()
 }

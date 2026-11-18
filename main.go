@@ -117,7 +117,7 @@ func serveFlags(o *serveOpts) *flag.FlagSet {
 	fs.StringVar(&o.claudePath, "claude", "", "path to the claude executable (overrides config)")
 	fs.StringVar(&o.claudeDir, "claude-dir", "", "Claude Code config dir to read sessions from and run claude with (CLAUDE_CONFIG_DIR; overrides config)")
 	fs.StringVar(&o.logFile, "log-file", "", "log file (overrides config; default even-cc.log next to the config)")
-	fs.StringVar(&o.logLevel, "log-level", "", "info | debug (adds raw CLI/SSE traffic to the log file) | warn | error (quieter stderr) (overrides config)")
+	fs.StringVar(&o.logLevel, "log-level", "", "info | debug (adds raw CLI and event traffic to the log file) | warn | error (quieter stderr) (overrides config)")
 	fs.StringVar(&o.debugFile, "debug-file", "", "deprecated: same as --log-file <path> --log-level debug")
 	fs.BoolVar(&o.noQR, "no-qr", false, "don't print the QR code")
 	return fs
@@ -193,7 +193,7 @@ func logFilePath(cfg config.Config, configPath string) string {
 }
 
 // newLogger always writes the log file (info, or debug with the raw CLI and
-// SSE traffic) and stderr (info; warn/error when set, never debug).
+// event traffic) and stderr (info; warn/error when set, never debug).
 func newLogger(level, file string) (*slog.Logger, io.Closer, error) {
 	stderrLevel, fileLevel := parseLevel(level), slog.LevelInfo
 	if stderrLevel < slog.LevelInfo {
@@ -431,7 +431,6 @@ func runServer(o *serveOpts) error {
 		env = append(env, "CLAUDE_CONFIG_DIR="+cfg.ClaudeDir)
 	}
 	h := hub.New(log)
-	h.PersistIDs(filepath.Join(filepath.Dir(o.configPath), "state.json"))
 	store := transcript.NewStore(claudeDir)
 	inf := info.New(claudePath, env, store, netaddr.Expose(cfg.Bind), log)
 	inf.Start(ctx)
@@ -498,7 +497,7 @@ func runServer(o *serveOpts) error {
 	printSetup(host, cfg.Port, cfg.Token, srv.Name, srv.STT != nil, srv.Mirror, o.noQR)
 	srv.Shutdown = stop
 
-	// SSE clears the read deadline and sets its own write deadlines.
+	// A WebSocket is hijacked, so these don't apply to it (ws.go bounds its writes).
 	httpSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	var wg sync.WaitGroup

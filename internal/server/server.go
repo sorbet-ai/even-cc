@@ -1,5 +1,5 @@
-// Package server implements even-terminal's HTTP/SSE API for Claude Code
-// (docs/even-protocol.md §2–§4).
+// Package server implements even-cc's HTTP and WebSocket API for Faceclaw's
+// Claude Code app (based on even-terminal's, docs/even-protocol.md §2–§3).
 package server
 
 import (
@@ -28,13 +28,6 @@ import (
 	"even-cc/internal/jsonx"
 	"even-cc/internal/transcript"
 )
-
-// HeartbeatInterval between ":heartbeat" SSE comments.
-var HeartbeatInterval = 15 * time.Second
-
-// SSEWriteTimeout bounds each SSE write: a phone that vanished from the
-// network is dropped after this, not after the TCP retransmission timeout.
-var SSEWriteTimeout = 30 * time.Second
 
 // maxBody caps request bodies.
 const maxBody = 10 << 20
@@ -165,7 +158,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	defer func() {
-		if r.URL.Path == "/api/events" || r.URL.Path == "/api/ws" {
+		if r.URL.Path == "/api/ws" {
 			return
 		}
 		// Failed requests are logged at info (401s are logged by the auth
@@ -189,10 +182,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r) {
 		s.logAuthFailure(r)
 		writeJSON(w, http.StatusUnauthorized, json.RawMessage(`{"error":{"code":"auth_failed","message":"Unauthorized"}}`))
-		return
-	}
-	if r.Method == http.MethodGet && path == "/api/events" {
-		s.events(w, r)
 		return
 	}
 	if r.Method == http.MethodGet && path == "/api/ws" {
@@ -243,10 +232,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.questionResponse(w, body)
 	case r.Method == http.MethodPost && path == "/api/interrupt":
 		s.interrupt(w, body)
-	case r.Method == http.MethodGet && path == "/api/status":
-		s.status(w, r)
-	case r.Method == http.MethodGet && path == "/api/messages":
-		s.messages(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/sessions/") && strings.HasSuffix(path, "/history"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api/sessions/"), "/history")
 		if id == "" || strings.Contains(id, "/") {
@@ -283,7 +268,7 @@ func (s *Server) logAuthFailure(r *http.Request) {
 }
 
 // health is GET /api/ecc/health: live sessions, their claude processes and
-// SSE clients, recovered panics. even-cc's own; the app never calls it.
+// WebSocket clients, recovered panics. even-cc's own; the app never calls it.
 func (s *Server) health(w http.ResponseWriter) {
 	writeJSON(w, 200, struct {
 		Version       string                 `json:"version"`
@@ -291,7 +276,7 @@ func (s *Server) health(w http.ResponseWriter) {
 		UptimeSeconds int64                  `json:"uptimeSeconds"`
 		Goroutines    int                    `json:"goroutines"`
 		Panics        int64                  `json:"panics"`
-		SSEClients    int                    `json:"sseClients"`
+		Clients       int                    `json:"clients"`
 		Sessions      []claude.SessionHealth `json:"sessions"`
 	}{s.Version, os.Getpid(), int64(time.Since(started).Seconds()), runtime.NumGoroutine(), guard.Panics.Load(), s.Hub.ClientCount(), s.Mgr.Health()})
 }
@@ -589,136 +574,6 @@ func (s *Server) interrupt(w http.ResponseWriter, body map[string]any) {
 	s.Log.Info("interrupt", "session", bodyString(body, "sessionId"), "state", sess.State())
 	sess.Interrupt()
 	writeJSON(w, 200, okBody)
-}
-
-func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	sid := r.URL.Query().Get("sessionId")
-	if sid == "" {
-		writeErr(w, 400, "Missing 'sessionId'")
-		return
-	}
-	sess := s.Mgr.Lookup(sid)
-	if sess == nil {
-		writeErr(w, 404, "Session not found")
-		return
-	}
-	writeJSON(w, 200, struct {
-		State     string `json:"state"`
-		SessionID string `json:"sessionId"`
-		Provider  string `json:"provider"`
-	}{sess.State(), sid, "claude"})
-}
-
-func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	sid := q.Get("sessionId")
-	if sid == "" {
-		writeErr(w, 400, "Missing 'sessionId'")
-		return
-	}
-	state := "idle"
-	var provider any
-	if p := queryValue(q, "provider"); p != nil {
-		provider = p
-	}
-	if sess := s.Mgr.Lookup(sid); sess != nil {
-		state = sess.State()
-		provider = "claude"
-	}
-	msgs := s.Hub.Messages(sid, int64(jsParseInt(q.Get("after"))))
-	writeJSON(w, 200, struct {
-		Messages  json.RawMessage `json:"messages"`
-		State     string          `json:"state"`
-		SessionID string          `json:"sessionId"`
-		Provider  any             `json:"provider"`
-	}{msgs, state, sid, provider})
-}
-
-// events is GET /api/events (SSE).
-func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	sid := r.URL.Query().Get("sessionId")
-	if sid == "" {
-		writeErr(w, 400, "Missing 'sessionId' query parameter")
-		return
-	}
-	rc := http.NewResponseController(w)
-	// The server's WriteTimeout would end the stream; each write gets its own
-	// deadline instead. (Its ReadTimeout doesn't apply: net/http clears the
-	// read deadline once the request is read.)
-	extend := func() {
-		if err := rc.SetWriteDeadline(time.Now().Add(SSEWriteTimeout)); err != nil {
-			s.Log.Debug("sse: setting write deadline failed", "err", err)
-		}
-	}
-	extend()
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	h.Set("Connection", "keep-alive")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if _, err := io.WriteString(w, ":ok\n\n"); err != nil {
-		return
-	}
-	_ = rc.Flush()
-	client := s.Hub.Subscribe(sid, r.URL.Query().Get("needReplay") == "true")
-	defer s.Hub.Unsubscribe(sid, client)
-	// Last-Event-ID is ignored (as by even-terminal) but logged: it shows
-	// whether the app tracks event ids across reconnects.
-	s.Log.Info("sse connected", "session", sid, "clients", s.Hub.ClientCount(), "remote", r.RemoteAddr, "lastEventId", r.Header.Get("Last-Event-ID"))
-	why := "client closed"
-	defer func() {
-		s.Log.Info("sse disconnected", "session", sid, "why", why, "clients", s.Hub.ClientCount()-1)
-	}()
-	hb := time.NewTicker(HeartbeatInterval)
-	defer hb.Stop()
-	write := func(b []byte) bool {
-		extend()
-		if _, err := w.Write(b); err != nil {
-			why = "write failed: " + err.Error()
-			return false
-		}
-		return true
-	}
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case frame, ok := <-client.C:
-			if !ok {
-				why = "dropped by the server (too slow)"
-				return
-			}
-			client.Took(frame)
-			if !write(frame) {
-				return
-			}
-			// write whatever else is already queued before flushing
-			for n := len(client.C); n > 0; n-- {
-				f, ok := <-client.C
-				if !ok {
-					why = "dropped by the server (too slow)"
-					return
-				}
-				client.Took(f)
-				if !write(f) {
-					return
-				}
-			}
-			if err := rc.Flush(); err != nil {
-				why = "flush failed: " + err.Error()
-				return
-			}
-		case <-hb.C:
-			if !write([]byte(":heartbeat\n\n")) {
-				return
-			}
-			if err := rc.Flush(); err != nil {
-				why = "flush failed: " + err.Error()
-				return
-			}
-		}
-	}
 }
 
 // machine: who this machine runs Claude as, and how much of the plan is used.

@@ -59,4 +59,18 @@ func TestWebSocketEvents(t *testing.T) {
 	if n := e.hub.ClientCount(); n != 0 {
 		t.Errorf("client not unsubscribed after close: %d", n)
 	}
+
+	// without needReplay only new events arrive
+	c2, _, err := websocket.Dial(ctx, base+"/api/ws?sessionId=s1&token="+token, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.CloseNow()
+	for e.hub.ClientCount() != 1 && time.Now().Before(deadline.Add(2*time.Second)) {
+		time.Sleep(time.Millisecond)
+	}
+	e.hub.Emit("s1", events.TextDelta{Type: "text_delta", Text: "new"})
+	if _, b, err := c2.Read(ctx); err != nil || string(b) != `{"type":"text_delta","text":"new"}` {
+		t.Errorf("no-replay %q %v", b, err)
+	}
 }

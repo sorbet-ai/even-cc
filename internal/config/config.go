@@ -76,7 +76,7 @@ type Display struct {
 
 type Log struct {
 	// Level: info (default) writes the log file and stderr; debug adds the
-	// raw CLI and SSE traffic to the file; warn | error quiet stderr only.
+	// raw CLI and event traffic to the file; warn | error quiet stderr only.
 	Level string `json:"level"`
 	// File is the log file; "" = even-cc.log next to the config file. It is
 	// always written, capped at a few MB with 2 old files kept.

@@ -426,10 +426,10 @@ type SessionHealth struct {
 	Questions       int    `json:"questions,omitempty"`
 	BackgroundTasks int    `json:"backgroundTasks,omitempty"`
 	Agents          int    `json:"agents,omitempty"`
-	SSEClients      int    `json:"sseClients"`
+	Clients         int    `json:"clients"`
 }
 
-// Health lists the sessions this server has run, with their SSE clients.
+// Health lists the sessions this server has run, with their WebSocket clients.
 func (m *Manager) Health() []SessionHealth {
 	m.mu.Lock()
 	all := make([]*Session, 0, len(m.sessions))
@@ -441,7 +441,7 @@ func (m *Manager) Health() []SessionHealth {
 	out := make([]SessionHealth, 0, len(all))
 	for _, s := range all {
 		h := s.health()
-		h.SSEClients = clients[h.ID]
+		h.Clients = clients[h.ID]
 		out = append(out, h)
 	}
 	return out
