@@ -29,6 +29,7 @@ type procHandle interface {
 }
 
 type pendingPerm struct {
+	event       any // the permission_request sent, for clients that connect later
 	proc        procHandle
 	reqID       string
 	toolName    string
@@ -46,6 +47,7 @@ type pendingPerm struct {
 }
 
 type pendingQuestion struct {
+	event        any // the user_question sent, for clients that connect later
 	proc         procHandle
 	reqID        string
 	toolUseID    string
@@ -1009,8 +1011,9 @@ func (s *Session) handleCanUseToolLocked(p procHandle, reqID, tool string, input
 		suggestions: sugg, description: desc, offered: offered, todoWrite: tool == "TodoWrite", blocksTurn: blocksTurn}
 	s.perms = append(s.perms, pp)
 	s.log.Info("permission request", "tool", tool, "desc", desc)
-	s.emit(events.PermissionRequest{Type: "permission_request", ToolName: tool, Description: desc,
-		Detail: detailFromInput(in), ToolUseID: toolUseID, Options: opts, Suggestions: sugg})
+	pp.event = events.PermissionRequest{Type: "permission_request", ToolName: tool, Description: desc,
+		Detail: detailFromInput(in), ToolUseID: toolUseID, Options: opts, Suggestions: sugg}
+	s.emit(pp.event)
 	pp.timer = time.AfterFunc(s.m.opts.PermissionTimeout, func() {
 		defer guard.Recover(s.log, "permission timeout")
 		s.mu.Lock()
@@ -1122,14 +1125,17 @@ func (s *Session) RespondPermission(decision string) bool {
 	if !pp.offered[decision] {
 		// Faceclaw always offers "Yes, and don't ask again". Without
 		// suggestions there is no rule for the CLI to save, so it is a plain
-		// allow, and even-cc allows the tool for the rest of the session.
+		// allow, and even-cc allows the tool for the rest of the session --
+		// except shell commands: one approved command must not approve all.
 		if decision != "allowAlways" {
 			return false
 		}
-		if s.alwaysAllowed == nil {
-			s.alwaysAllowed = map[string]bool{}
+		if !shellTool(pp.toolName) {
+			if s.alwaysAllowed == nil {
+				s.alwaysAllowed = map[string]bool{}
+			}
+			s.alwaysAllowed[pp.toolName] = true
 		}
-		s.alwaysAllowed[pp.toolName] = true
 	}
 	s.perms = s.perms[1:]
 	s.log.Info("permission answered", "tool", pp.toolName, "decision", decision)
@@ -1172,7 +1178,8 @@ func (s *Session) askQuestionLocked(p procHandle, reqID string, input json.RawMe
 	pq := &pendingQuestion{proc: p, reqID: reqID, toolUseID: toolUseID, questions: qs, rawQuestions: in.Questions, blocksTurn: blocksTurn}
 	s.questions = append(s.questions, pq)
 	s.log.Info("question", "count", len(qs))
-	s.emit(events.UserQuestion{Type: "user_question", Questions: qs, ToolUseID: toolUseID})
+	pq.event = events.UserQuestion{Type: "user_question", Questions: qs, ToolUseID: toolUseID}
+	s.emit(pq.event)
 	pq.timer = time.AfterFunc(s.m.opts.QuestionTimeout, func() {
 		defer guard.Recover(s.log, "question timeout")
 		s.mu.Lock()
@@ -1455,4 +1462,25 @@ func isStopWord(text string) bool {
 // prompt itself ("Claude needs your permission to use AskUserQuestion").
 func redundantNotice(kind, message string) bool {
 	return kind == "permission_prompt" || strings.HasPrefix(message, "Claude needs your permission")
+}
+
+// shellTool: tools that run arbitrary commands, never allowed wholesale.
+func shellTool(name string) bool {
+	return name == "Bash" || name == "PowerShell" || name == "BashOutput"
+}
+
+// PendingEvents re-sends the open permission requests and questions, for a
+// client that connects (or reconnects) while they wait: it would otherwise
+// never see them.
+func (s *Session) PendingEvents() []any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []any
+	for _, pp := range s.perms {
+		out = append(out, pp.event)
+	}
+	for _, pq := range s.questions {
+		out = append(out, pq.event)
+	}
+	return out
 }

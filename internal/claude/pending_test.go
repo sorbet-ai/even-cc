@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"even-cc/internal/jsonx"
 	"strings"
 	"sync"
 	"testing"
@@ -185,7 +186,7 @@ func TestAllowAlwaysWithoutSuggestions(t *testing.T) {
 	canUse := func(reqID, tool, input string) {
 		h.feed([]byte(`{"type":"control_request","request_id":"` + reqID + `","request":{"subtype":"can_use_tool","tool_name":"` + tool + `","input":` + input + `,"tool_use_id":"t-` + reqID + `"}}`))
 	}
-	canUse("req-1", "Bash", `{"command":"rm -rf build"}`)
+	canUse("req-1", "Write", `{"file_path":"a","content":"b"}`)
 	if s.RespondPermission("bogus") {
 		t.Error("unoffered decision accepted")
 	}
@@ -196,16 +197,25 @@ func TestAllowAlwaysWithoutSuggestions(t *testing.T) {
 	if len(r) != 1 || !strings.Contains(r[0], `"behavior":"allow"`) || strings.Contains(r[0], "updatedPermissions") {
 		t.Fatalf("response %v", r)
 	}
-	canUse("req-2", "Bash", `{"command":"make clean"}`)
+	canUse("req-2", "Write", `{"file_path":"c","content":"d"}`)
 	if r := h.responsesFor("req-2"); len(r) != 1 || !strings.Contains(r[0], `"behavior":"allow"`) {
 		t.Errorf("same tool not allowed: %v", r)
 	}
-	canUse("req-3", "Write", `{"file_path":"x","content":"y"}`)
+	canUse("req-3", "Edit", `{"file_path":"x","old_string":"y","new_string":"z"}`)
 	if r := h.responsesFor("req-3"); len(r) != 0 {
 		t.Errorf("other tool answered: %v", r)
 	}
-	if !strings.HasSuffix(h.sig(), "permission_request permission_result:always permission_request") {
-		t.Errorf("events %s", h.sig())
+	if !s.RespondPermission("allow") {
+		t.Fatal("allow refused")
+	}
+	// shell commands: "don't ask again" allows this one only
+	canUse("req-4", "Bash", `{"command":"rm -rf build"}`)
+	if !s.RespondPermission("allowAlways") {
+		t.Fatal("allowAlways refused for Bash")
+	}
+	canUse("req-5", "Bash", `{"command":"make clean"}`)
+	if r := h.responsesFor("req-5"); len(r) != 0 {
+		t.Errorf("a later shell command was allowed wholesale: %v", r)
 	}
 }
 
@@ -393,5 +403,23 @@ func TestCLILinePanicRecovered(t *testing.T) {
 	h.reply("Done.")
 	if st := h.m.StatusOf(h.sid); st != "idle" {
 		t.Errorf("state %s", st)
+	}
+}
+
+// A client connecting while a prompt waits gets it again.
+func TestPendingEventsForLateClients(t *testing.T) {
+	h := newTurnHarness(t)
+	s := h.m.Lookup(h.sid)
+	if len(s.PendingEvents()) != 0 {
+		t.Fatal("nothing pending yet")
+	}
+	h.feed([]byte(`{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"a","content":"b"},"tool_use_id":"t-1"}}`))
+	ev := s.PendingEvents()
+	if len(ev) != 1 || !strings.Contains(string(jsonx.Marshal(ev[0])), `"type":"permission_request"`) {
+		t.Fatalf("pending %v", ev)
+	}
+	s.RespondPermission("allow")
+	if len(s.PendingEvents()) != 0 {
+		t.Fatal("answered prompt still pending")
 	}
 }

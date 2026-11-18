@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -35,8 +36,13 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	// The connection outlives the server's Write/Read timeouts: net/http's
 	// deadlines don't apply to a hijacked connection, so bound writes here.
 	ctx := c.CloseRead(context.Background()) // client messages are not used; this handles ping/close
-	client := s.Hub.Subscribe(sid, r.URL.Query().Get("needReplay") == "true")
+	replay := r.URL.Query().Get("needReplay") == "true"
+	client := s.Hub.Subscribe(sid, replay)
 	defer s.Hub.Unsubscribe(sid, client)
+	var pending []any // prompts waiting for an answer: a client (re)connecting mid-wait must see them
+	if sess := s.Mgr.Lookup(sid); sess != nil && !replay {
+		pending = sess.PendingEvents()
+	}
 	s.Log.Info("ws connected", "session", sid, "clients", s.Hub.ClientCount(), "remote", r.RemoteAddr)
 	why := "client closed"
 	defer func() {
@@ -50,6 +56,11 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 		return true
+	}
+	for _, ev := range pending {
+		if b, err := json.Marshal(ev); err == nil && !send(b) {
+			return
+		}
 	}
 	hb := time.NewTicker(HeartbeatInterval)
 	defer hb.Stop()

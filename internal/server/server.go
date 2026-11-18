@@ -204,6 +204,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.prompt(w, body)
 	case r.Method == http.MethodPost && path == "/api/release":
 		s.release(w, body)
+	case r.Method == http.MethodPost && path == "/api/message":
+		s.message(w, body)
 	case r.Method == http.MethodPost && path == "/api/shutdown" && s.Shutdown != nil && isLoopback(r.RemoteAddr):
 		writeJSON(w, 200, okBody)
 		go s.Shutdown()
@@ -581,4 +583,25 @@ func isLoopback(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// message sends text into a session another Claude Code process holds, as
+// a cross-session message (it stays held there). {sessionId, text}.
+func (s *Server) message(w http.ResponseWriter, body map[string]any) {
+	sid := bodyString(body, "sessionId")
+	text, _ := body["text"].(string)
+	if sid == "" || text == "" {
+		writeErr(w, 400, "Missing 'sessionId' or 'text'")
+		return
+	}
+	if err := s.Mgr.MessageElsewhere(sid, text); err != nil {
+		var he *claude.HTTPError
+		if errors.As(err, &he) {
+			writeErr(w, he.Code, he.Msg)
+			return
+		}
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 202, okBody)
 }
