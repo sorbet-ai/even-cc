@@ -76,9 +76,6 @@ type Log struct {
 	// File is the log file; "" = even-cc.log next to the config file. It is
 	// always written, capped at a few MB with 2 old files kept.
 	File string `json:"file"`
-	// DebugFile is deprecated: a non-empty value means File=DebugFile and
-	// Level=debug. It is dropped when the config is saved.
-	DebugFile string `json:"debugFile,omitempty"`
 }
 
 type Config struct {
@@ -205,13 +202,6 @@ func (c *Config) Validate() error {
 	if c.Display.SubagentProgressSeconds < 0 {
 		return fmt.Errorf("display.subagentProgressSeconds must be >= 0")
 	}
-	if c.Log.DebugFile != "" { // deprecated key
-		if c.Log.File == "" {
-			c.Log.File = c.Log.DebugFile
-		}
-		c.Log.Level = "debug"
-		c.Log.DebugFile = ""
-	}
 	if c.Timeouts.PermissionMinutes <= 0 || c.Timeouts.QuestionMinutes <= 0 {
 		return fmt.Errorf("timeouts must be > 0")
 	}
@@ -219,8 +209,9 @@ func (c *Config) Validate() error {
 }
 
 // decode unmarshals JSON on top of defaults. A config file may hold keys of
-// removed features (hub/join, talk while busy, ...): Load ignores unknown
-// keys, and they drop out the next time the file is saved. Set is strict.
+// removed features (hub/join, talk while busy, log.debugFile, ...): Load
+// ignores unknown keys, and they drop out the next time the file is saved.
+// Set is strict.
 func decode(b []byte, strict bool) (Config, error) {
 	c := Default()
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -234,9 +225,8 @@ func decode(b []byte, strict bool) (Config, error) {
 }
 
 // Load reads path. If it doesn't exist, a config with a fresh token is
-// created (seeded from importFrom, an even-terminal config, when given).
-// created reports whether the file was written.
-func Load(path, importFrom string) (cfg Config, created bool, err error) {
+// created. created reports whether the file was written.
+func Load(path string) (cfg Config, created bool, err error) {
 	b, err := os.ReadFile(path)
 	if err == nil {
 		cfg, err = decode(b, false)
@@ -253,41 +243,8 @@ func Load(path, importFrom string) (cfg Config, created bool, err error) {
 		return cfg, false, err
 	}
 	cfg = Default()
-	if importFrom != "" {
-		importEvenTerminal(&cfg, importFrom)
-	}
-	if cfg.Token == "" {
-		cfg.Token = NewToken()
-	}
+	cfg.Token = NewToken()
 	return cfg, true, Save(path, cfg)
-}
-
-// importEvenTerminal copies token/port/cwd/name from an even-terminal config
-// so an already-paired phone keeps working.
-func importEvenTerminal(cfg *Config, path string) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	var et struct {
-		Port  int    `json:"port"`
-		Token string `json:"token"`
-		Cwd   string `json:"cwd"`
-		Name  string `json:"name"`
-	}
-	if json.Unmarshal(b, &et) != nil {
-		return
-	}
-	if et.Token != "" {
-		cfg.Token = et.Token
-	}
-	if et.Port > 0 && et.Port <= 65535 {
-		cfg.Port = et.Port
-	}
-	if et.Cwd != "" {
-		cfg.Cwd = et.Cwd
-	}
-	cfg.Name = et.Name
 }
 
 // Save writes cfg with mode 0600.

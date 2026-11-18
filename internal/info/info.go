@@ -1,5 +1,6 @@
-// Package info caches /api/info (CLI version, account, model). Nothing here
-// runs per request: the CLI is probed once at startup and every 30 minutes.
+// Package info caches the CLI version and account for /api/machine. Nothing
+// here runs per request: the CLI is probed once at startup and every 30
+// minutes.
 package info
 
 import (
@@ -13,7 +14,6 @@ import (
 
 	"even-cc/internal/claude"
 	"even-cc/internal/guard"
-	"even-cc/internal/transcript"
 )
 
 // Account is ordered like even-terminal's response.
@@ -24,20 +24,13 @@ type Account struct {
 }
 
 type Response struct {
-	Account  any    `json:"account"` // *Account or {}
-	Model    string `json:"model"`
-	Version  string `json:"version"`
-	Provider string `json:"provider"`
-	Extra    struct {
-		Expose string `json:"expose"`
-	} `json:"extra"`
+	Account any    `json:"account"` // *Account or {}
+	Version string `json:"version"`
 }
 
 type Info struct {
 	claudePath string
 	env        []string
-	store      *transcript.Store
-	expose     string
 	log        *slog.Logger
 
 	ready chan struct{}
@@ -46,12 +39,10 @@ type Info struct {
 	mu      sync.Mutex
 	version string
 	account *Account
-	model   string
-	modelAt time.Time
 }
 
-func New(claudePath string, env []string, store *transcript.Store, expose string, log *slog.Logger) *Info {
-	return &Info{claudePath: claudePath, env: env, store: store, expose: expose, log: log, ready: make(chan struct{})}
+func New(claudePath string, env []string, log *slog.Logger) *Info {
+	return &Info{claudePath: claudePath, env: env, log: log, ready: make(chan struct{})}
 }
 
 // Start probes the CLI now and then every 30 minutes.
@@ -177,17 +168,8 @@ func (i *Info) Get() Response {
 	case <-time.After(6 * time.Second):
 	}
 	i.mu.Lock()
-	if time.Since(i.modelAt) > 15*time.Second {
-		i.modelAt = time.Now()
-		i.mu.Unlock()
-		m := transcript.FormatModel(i.store.RecentModel())
-		i.mu.Lock()
-		i.model = m
-	}
-	r := Response{Model: i.model, Version: i.version, Provider: "claude"}
-	if r.Model == "" {
-		r.Model = "Unknown"
-	}
+	defer i.mu.Unlock()
+	r := Response{Version: i.version}
 	if r.Version == "" {
 		r.Version = "Unknown"
 	}
@@ -196,7 +178,5 @@ func (i *Info) Get() Response {
 	} else {
 		r.Account = struct{}{}
 	}
-	i.mu.Unlock()
-	r.Extra.Expose = i.expose
 	return r
 }

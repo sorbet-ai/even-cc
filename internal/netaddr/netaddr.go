@@ -115,14 +115,3 @@ func Resolve(bind string) (Host, error) {
 		return Host{Label: "LAN", Address: LANAddress()}, nil
 	}
 }
-
-// Expose is /api/info extra.expose for a bind mode.
-func Expose(bind string) string {
-	switch {
-	case bind == "tailscale":
-		return "tailscale"
-	case strings.HasPrefix(bind, "interface:"):
-		return "other"
-	}
-	return "off"
-}

@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"html"
 	"io"
 	"log/slog"
 	"math"
@@ -68,8 +67,6 @@ type Server struct {
 	authSuppressed int
 }
 
-var supportedProviders = map[string]bool{"claude": true, "claude-sync": true, "codex": true}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	var b []byte
 	if raw, ok := v.([]byte); ok {
@@ -91,15 +88,8 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errBody{Error: msg})
 }
 
-// notFoundHTML is Express's default 404 page.
-func notFoundHTML(w http.ResponseWriter, r *http.Request) {
-	body := "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot " +
-		r.Method + " " + html.EscapeString(r.URL.EscapedPath()) + "</pre>\n</body>\n</html>\n"
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusNotFound)
-	_, _ = io.WriteString(w, body)
+func notFound(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, http.StatusNotFound, "Cannot "+r.Method+" "+r.URL.EscapedPath())
 }
 
 func redact(u *url.URL) string {
@@ -176,7 +166,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path != "/api" && !strings.HasPrefix(path, "/api/") {
-		notFoundHTML(w, r)
+		notFound(w, r)
 		return
 	}
 	if !s.authorized(r) {
@@ -197,19 +187,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A provider parameter (the app sends provider=claude) is ignored.
 	body, ok := s.parseBody(w, r)
 	if !ok {
 		return
-	}
-	q := r.URL.Query()
-	for _, p := range []any{queryValue(q, "provider"), body["provider"]} {
-		if p == nil {
-			continue
-		}
-		if ps, ok := p.(string); !ok || !supportedProviders[ps] {
-			writeErr(w, 400, "Unsupported provider \""+jsString(p)+"\". Supported providers: claude, claude-sync, codex")
-			return
-		}
 	}
 
 	switch {
@@ -235,12 +216,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/sessions/") && strings.HasSuffix(path, "/history"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api/sessions/"), "/history")
 		if id == "" || strings.Contains(id, "/") {
-			notFoundHTML(w, r)
+			notFound(w, r)
 			return
 		}
 		s.history(w, r, id)
 	default:
-		notFoundHTML(w, r)
+		notFound(w, r)
 	}
 }
 
@@ -295,19 +276,6 @@ func (s *Server) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(s.Token)) == 1
 }
 
-// queryValue mimics Express req.query: nil if absent, string if once,
-// []string if repeated.
-func queryValue(q url.Values, key string) any {
-	v, ok := q[key]
-	if !ok {
-		return nil
-	}
-	if len(v) == 1 {
-		return v[0]
-	}
-	return v
-}
-
 func jsString(v any) string {
 	switch t := v.(type) {
 	case string:
@@ -344,9 +312,7 @@ func (s *Server) parseBody(w http.ResponseWriter, r *http.Request) (map[string]a
 	}
 	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(400)
-		_, _ = io.WriteString(w, "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>SyntaxError: "+html.EscapeString(err.Error())+"</pre>\n</body>\n</html>\n")
+		writeErr(w, 400, "Invalid JSON body: "+err.Error())
 		return nil, false
 	}
 	if m, ok := v.(map[string]any); ok {
@@ -395,10 +361,6 @@ type sessionItem struct {
 
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if q.Get("provider") == "codex" {
-		writeJSON(w, 200, json.RawMessage(`{"sessions":[]}`))
-		return
-	}
 	limit := int(jsNumber(q.Get("limit")))
 	if limit == 0 {
 		limit = 10

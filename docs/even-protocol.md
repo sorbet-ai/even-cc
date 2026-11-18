@@ -7,7 +7,9 @@ server `@evenrealities/even-terminal`. It's written so we can build a drop-in Go
 > **even-cc today** serves only Faceclaw's Claude Code app, which follows a session over
 > `GET /api/ws` (one JSON event per message, `needReplay=true` for the buffered ones). The SSE
 > stream (`/api/events`, §4), `/api/status`, `/api/messages` and the event ids persisted across
-> restarts were removed from even-cc; this document still describes even-terminal's protocol.
+> restarts were removed from even-cc, `provider` parameters are ignored, and 404s and bad JSON
+> bodies get `{"error": …}` instead of Express's HTML pages; this document still describes
+> even-terminal's protocol.
 
 **Sources:**
 

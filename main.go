@@ -100,7 +100,6 @@ type serveOpts struct {
 	name       string
 	claudePath string
 	logFile    string
-	debugFile  string // deprecated: --log-file + --log-level debug
 	logLevel   string
 	claudeDir  string
 	noQR       bool
@@ -118,14 +117,13 @@ func serveFlags(o *serveOpts) *flag.FlagSet {
 	fs.StringVar(&o.claudeDir, "claude-dir", "", "Claude Code config dir to read sessions from and run claude with (CLAUDE_CONFIG_DIR; overrides config)")
 	fs.StringVar(&o.logFile, "log-file", "", "log file (overrides config; default even-cc.log next to the config)")
 	fs.StringVar(&o.logLevel, "log-level", "", "info | debug (adds raw CLI and event traffic to the log file) | warn | error (quieter stderr) (overrides config)")
-	fs.StringVar(&o.debugFile, "debug-file", "", "deprecated: same as --log-file <path> --log-level debug")
 	fs.BoolVar(&o.noQR, "no-qr", false, "don't print the QR code")
 	return fs
 }
 
 // loadConfig loads (or creates, with a fresh token) the config.
 func loadConfig(path string) (config.Config, error) {
-	cfg, created, err := config.Load(path, "")
+	cfg, created, err := config.Load(path)
 	if err != nil {
 		return cfg, err
 	}
@@ -372,9 +370,6 @@ func runServer(o *serveOpts) error {
 	if o.logFile != "" {
 		cfg.Log.File = o.logFile
 	}
-	if o.debugFile != "" {
-		cfg.Log.DebugFile = o.debugFile // Validate maps it to File + debug
-	}
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -386,9 +381,6 @@ func runServer(o *serveOpts) error {
 	defer closer.Close()
 	crashOutput(logPath, log)
 	log.Info("even-cc starting", "version", Version, "pid", os.Getpid(), "config", o.configPath, "log", logPath, "logLevel", cfg.Log.Level)
-	if o.debugFile != "" {
-		log.Warn("--debug-file is deprecated; use --log-file <path> --log-level debug")
-	}
 
 	claudePath, err := claude.FindClaude(cfg.Claude.Path)
 	if err != nil {
@@ -432,7 +424,7 @@ func runServer(o *serveOpts) error {
 	}
 	h := hub.New(log)
 	store := transcript.NewStore(claudeDir)
-	inf := info.New(claudePath, env, store, netaddr.Expose(cfg.Bind), log)
+	inf := info.New(claudePath, env, log)
 	inf.Start(ctx)
 
 	minutes := func(m float64) time.Duration { return time.Duration(m * float64(time.Minute)) }

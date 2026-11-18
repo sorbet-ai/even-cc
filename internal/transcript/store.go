@@ -350,40 +350,6 @@ func (s *Store) LastUUID(id string) (string, error) {
 	return "", nil
 }
 
-// RecentModel returns the model id of the last assistant message among the
-// 3 most recently modified sessions ("" if none).
-func (s *Store) RecentModel() string {
-	list, err := s.List(3, "")
-	if err != nil {
-		return ""
-	}
-	for _, info := range list {
-		tail, _, err := readTail(info.Path, 512*1024)
-		if err != nil {
-			continue
-		}
-		ls := lines(tail)
-		for i := len(ls) - 1; i > 0; i-- {
-			if !bytes.Contains(ls[i], []byte(`"type":"assistant"`)) {
-				continue
-			}
-			var e struct {
-				Type    string `json:"type"`
-				Message struct {
-					Model string `json:"model"`
-				} `json:"message"`
-			}
-			if json.Unmarshal(ls[i], &e) != nil || e.Type != "assistant" {
-				continue
-			}
-			if m := e.Message.Model; m != "" && !strings.HasPrefix(m, "<") {
-				return m
-			}
-		}
-	}
-	return ""
-}
-
 var dateSuffix = regexp.MustCompile(`-\d{8,}$`)
 
 // FormatModel turns "claude-opus-5-5" into "Opus 5.5" like even-terminal.

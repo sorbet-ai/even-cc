@@ -49,7 +49,7 @@ func newEnv(t *testing.T) *env {
 			`{"type":"ai-title","aiTitle":"EVEN"}`+"\n"), 0o644)
 	h := hub.New(nil)
 	mgr := claude.NewManager(claude.Options{ClaudePath: filepath.Join(t.TempDir(), "no-claude"), DefaultCwd: cwd, StatsInterval: -1}, claude.ClassicDisplay(), h, store, log)
-	inf := info.New("", nil, store, "off", log)
+	inf := info.New("", nil, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	inf.Start(ctx)
@@ -124,20 +124,19 @@ func TestAuth(t *testing.T) {
 func TestStaticResponses(t *testing.T) {
 	e := newEnv(t)
 	st, h, body := e.do("GET", "/?token="+token+"&defaultProvider=claude", "", map[string]string{})
-	expect(t, st, body, 404, fixture(t, "root.404.html"))
-	if h.Get("Content-Type") != "text/html; charset=utf-8" {
+	expect(t, st, body, 404, `{"error":"Cannot GET /"}`)
+	if h.Get("Content-Type") != "application/json; charset=utf-8" {
 		t.Errorf("root content-type %s", h.Get("Content-Type"))
 	}
 	st, _, body = e.do("GET", "/api/nonexistent", "", nil)
-	expect(t, st, body, 404, strings.Replace(fixture(t, "root.404.html"), "Cannot GET /", "Cannot GET /api/nonexistent", 1))
+	expect(t, st, body, 404, `{"error":"Cannot GET /api/nonexistent"}`)
 
 	cases := []struct {
 		method, path, body string
 		status             int
 		file               string
 	}{
-		{"GET", "/api/sessions?provider=bogus", "", 400, "error.unsupported-provider.400.json"},
-		{"POST", "/api/prompt", `{"text":"x","provider":"bogus"}`, 400, "error.unsupported-provider.400.json"},
+		{"POST", "/api/prompt", `{"text":`, 400, `{"error":"Invalid JSON body: unexpected end of JSON input"}`},
 		{"GET", "/api/ws", "", 400, "error.events-missing-sessionId.400.json"},
 		{"GET", "/api/sessions/nope/history?limit=10&provider=claude", "", 200, "history.unknown-session.200.json"},
 		{"POST", "/api/prompt", `{"sessionId":"x"}`, 400, "error.missing-text.400.json"},
@@ -146,7 +145,6 @@ func TestStaticResponses(t *testing.T) {
 		{"POST", "/api/permission-response", `{"sessionId":"` + e.sid + `","decision":"allow"}`, 404, "error.session-not-found.404.json"},
 		{"POST", "/api/question-response", `{"sessionId":"` + e.sid + `","answer":"x"}`, 404, "error.session-not-found.404.json"},
 		{"POST", "/api/interrupt", `{}`, 400, "error.missing-sessionId.400.json"},
-		{"GET", "/api/sessions?provider=codex", "", 200, `{"sessions":[]}`},
 	}
 	for _, c := range cases {
 		want := c.file
@@ -172,6 +170,10 @@ func TestSessionsAndHistoryShapes(t *testing.T) {
 	_ = json.Unmarshal([]byte(body), &got)
 	if len(got.Sessions) != 1 || got.Sessions[0]["title"] != "EVEN" || got.Sessions[0]["status"] != "idle" || got.Sessions[0]["cwd"] != e.cwd {
 		t.Fatalf("sessions %s", body)
+	}
+	// the provider parameter is ignored
+	if st, _, b := e.do("GET", "/api/sessions?provider=codex", "", nil); st != 200 || b != body {
+		t.Errorf("provider=codex: %d %s", st, b)
 	}
 	// key order identical to the live fixture
 	fx := fixture(t, "sessions.claude.200.json")

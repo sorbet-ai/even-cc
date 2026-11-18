@@ -141,9 +141,6 @@ func TestHistoryMainChain(t *testing.T) {
 	if u, _ := f.s.LastUUID(sid); u != "side" {
 		t.Errorf("last uuid %q", u)
 	}
-	if m := f.s.RecentModel(); m != "claude-opus-5-5" {
-		t.Errorf("model %q", m)
-	}
 }
 
 // A chain whose older items sit outside the first 1 MiB tail window.
