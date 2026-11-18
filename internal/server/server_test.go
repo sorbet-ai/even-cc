@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -32,6 +33,7 @@ type env struct {
 	hub *hub.Hub
 	cwd string
 	sid string // an existing transcript
+	dir string // its project dir
 }
 
 func newEnv(t *testing.T) *env {
@@ -54,7 +56,7 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(cancel)
 	inf.Start(ctx)
 	s := &Server{Token: token, Mgr: mgr, Hub: h, Store: store, Log: log, Version: "0.1.0", Name: "mule", Info: inf}
-	e := &env{t: t, srv: httptest.NewServer(s), s: s, hub: h, cwd: cwd, sid: sid}
+	e := &env{t: t, srv: httptest.NewServer(s), s: s, hub: h, cwd: cwd, sid: sid, dir: dir}
 	t.Cleanup(e.srv.Close)
 	return e
 }
@@ -195,6 +197,35 @@ func TestSessionsAndHistoryShapes(t *testing.T) {
 	st, _, body = e.do("GET", "/api/sessions/"+e.sid+"/history?limit=10&provider=claude", "", nil)
 	if st != 200 || body != `{"history":[{"role":"user","text":"hello there"},{"role":"assistant","text":"hi"}]}` {
 		t.Errorf("history %d %s", st, body)
+	}
+}
+
+// Up to 50 sessions by default, each with its status; limit still applies.
+func TestSessionsLimitAndStatus(t *testing.T) {
+	e := newEnv(t)
+	for i := 0; i < 14; i++ {
+		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+		_ = os.WriteFile(filepath.Join(e.dir, id+".jsonl"), []byte(`{"type":"user","uuid":"u1","parentUuid":null,"cwd":`+string(mustJSON(e.cwd))+`,"message":{"role":"user","content":"hi"}}`+"\n"), 0o644)
+	}
+	list := func(q string) []map[string]any {
+		var got struct {
+			Sessions []map[string]any `json:"sessions"`
+		}
+		_, _, body := e.do("GET", "/api/sessions"+q, "", nil)
+		_ = json.Unmarshal([]byte(body), &got)
+		return got.Sessions
+	}
+	all := list("")
+	if len(all) != 15 {
+		t.Fatalf("%d sessions", len(all))
+	}
+	for _, s := range all {
+		if s["status"] != "idle" {
+			t.Errorf("session %v status %v", s["id"], s["status"])
+		}
+	}
+	if n := len(list("?limit=3")); n != 3 {
+		t.Errorf("limit=3: %d", n)
 	}
 }
 

@@ -177,6 +177,38 @@ func TestPromptAnswersPendingQuestion(t *testing.T) {
 	}
 }
 
+// Faceclaw always offers allowAlways. With no suggestions to save it
+// allows, and the tool is allowed for the rest of the session.
+func TestAllowAlwaysWithoutSuggestions(t *testing.T) {
+	h := newTurnHarness(t)
+	s := h.m.Lookup(h.sid)
+	canUse := func(reqID, tool, input string) {
+		h.feed([]byte(`{"type":"control_request","request_id":"` + reqID + `","request":{"subtype":"can_use_tool","tool_name":"` + tool + `","input":` + input + `,"tool_use_id":"t-` + reqID + `"}}`))
+	}
+	canUse("req-1", "Bash", `{"command":"rm -rf build"}`)
+	if s.RespondPermission("bogus") {
+		t.Error("unoffered decision accepted")
+	}
+	if !s.RespondPermission("allowAlways") {
+		t.Fatal("allowAlways refused")
+	}
+	r := h.responsesFor("req-1")
+	if len(r) != 1 || !strings.Contains(r[0], `"behavior":"allow"`) || strings.Contains(r[0], "updatedPermissions") {
+		t.Fatalf("response %v", r)
+	}
+	canUse("req-2", "Bash", `{"command":"make clean"}`)
+	if r := h.responsesFor("req-2"); len(r) != 1 || !strings.Contains(r[0], `"behavior":"allow"`) {
+		t.Errorf("same tool not allowed: %v", r)
+	}
+	canUse("req-3", "Write", `{"file_path":"x","content":"y"}`)
+	if r := h.responsesFor("req-3"); len(r) != 0 {
+		t.Errorf("other tool answered: %v", r)
+	}
+	if !strings.HasSuffix(h.sig(), "permission_request permission_result:always permission_request") {
+		t.Errorf("events %s", h.sig())
+	}
+}
+
 func TestPromptDeniesPendingPermission(t *testing.T) {
 	h := newTurnHarness(t)
 	h.bash("tb1")

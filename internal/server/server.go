@@ -363,7 +363,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := int(jsNumber(q.Get("limit")))
 	if limit == 0 {
-		limit = 10
+		limit = 50
 	}
 	if limit < 0 {
 		limit = 0
@@ -378,15 +378,13 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]sessionItem, 0, len(list))
 	held := s.Mgr.OpenElsewhere()
-	for i, info := range list {
+	for _, info := range list {
 		it := sessionItem{ID: info.ID, Title: info.Title, Timestamp: isoTime(time.UnixMilli(info.Mtime)), Cwd: info.Cwd, Provider: "claude"}
 		if e, ok := held[info.ID]; ok {
 			it.OpenElsewhere = e.Where
 		}
-		if i < 10 {
-			st := s.Mgr.StatusOf(info.ID)
-			it.Status = &st
-		}
+		st := s.Mgr.StatusOf(info.ID) // in memory
+		it.Status = &st
 		items = append(items, it)
 	}
 	writeJSON(w, 200, struct {

@@ -428,8 +428,13 @@ func TestAnswersEncoding(t *testing.T) {
 	if got := string(answersFor(`{"Q1":"A, B"}`, qs)); got != `{"Q1":"A, B"}` {
 		t.Errorf("json answer: %s", got)
 	}
-	if got := string(answersFor("1", qs)); got != `1` {
-		t.Errorf("json scalar: %s", got)
+	// a dictated answer that happens to be JSON but not an object is text
+	for _, a := range []string{"42", "true", "null", `"quoted"`, "[1, 2]", " 7 "} {
+		as := string(jsonx.Marshal(a))
+		want := `{"Q1":` + as + `,"H2":` + as + `}`
+		if got := string(answersFor(a, qs)); got != want {
+			t.Errorf("%q: %s, want %s", a, got, want)
+		}
 	}
 }
 

@@ -109,6 +109,10 @@ type Session struct {
 	usageBase map[string]modelUsage
 
 	agentTicker bool // a goroutine refreshes subagent lines
+
+	// alwaysAllowed: tools the user allowed "always" when the CLI offered
+	// no rule to save; allowed for the rest of this session in this process.
+	alwaysAllowed map[string]bool
 }
 
 func newSession(m *Manager, id, cwd string) *Session {
@@ -980,6 +984,12 @@ func (s *Session) handleCanUseToolLocked(p procHandle, reqID, tool string, input
 	case auto[tool] && tool != "TodoWrite" && tool != "TaskUpdate":
 		allow()
 		return
+	case s.alwaysAllowed[tool]:
+		if tool == "TodoWrite" {
+			s.emitTodoProgressLocked(in)
+		}
+		allow()
+		return
 	}
 	d := s.m.Display()
 	desc := ClassicSummary(tool, in)
@@ -1110,7 +1120,16 @@ func (s *Session) RespondPermission(decision string) bool {
 	}
 	pp := s.perms[0]
 	if !pp.offered[decision] {
-		return false
+		// Faceclaw always offers "Yes, and don't ask again". Without
+		// suggestions there is no rule for the CLI to save, so it is a plain
+		// allow, and even-cc allows the tool for the rest of the session.
+		if decision != "allowAlways" {
+			return false
+		}
+		if s.alwaysAllowed == nil {
+			s.alwaysAllowed = map[string]bool{}
+		}
+		s.alwaysAllowed[pp.toolName] = true
 	}
 	s.perms = s.perms[1:]
 	s.log.Info("permission answered", "tool", pp.toolName, "decision", decision)
@@ -1175,11 +1194,12 @@ func (s *Session) removeQuestionLocked(pq *pendingQuestion) bool {
 	return false
 }
 
-// answersFor encodes the app's answer string like even-terminal: valid JSON
-// is used as-is, anything else is the answer to every question.
+// answersFor encodes the app's answer string: a JSON object is the answers
+// as-is (as in even-terminal), anything else (also "42", "true" or "null",
+// which a dictated answer can be) is the answer to every question.
 func answersFor(answer string, qs []events.Question) json.RawMessage {
-	if json.Valid([]byte(answer)) {
-		if v, err := jsonx.Parse([]byte(answer)); err == nil {
+	if strings.HasPrefix(strings.TrimSpace(answer), "{") && json.Valid([]byte(answer)) {
+		if v, err := jsonx.Parse([]byte(answer)); err == nil && v.Kind == jsonx.Object {
 			b, _ := v.MarshalJSON()
 			return b
 		}
