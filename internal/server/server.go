@@ -65,6 +65,9 @@ type Server struct {
 	Mirror string
 	// Info knows the Claude account this machine runs as; nil = unknown.
 	Info *info.Info
+	// Shutdown stops the server (POST /api/shutdown from this machine, for
+	// `even-cc stop`); nil = not offered.
+	Shutdown func()
 
 	authMu         sync.Mutex
 	authWindow     time.Time
@@ -231,6 +234,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.prompt(w, body)
 	case r.Method == http.MethodPost && path == "/api/release":
 		s.release(w, body)
+	case r.Method == http.MethodPost && path == "/api/shutdown" && s.Shutdown != nil && isLoopback(r.RemoteAddr):
+		writeJSON(w, 200, okBody)
+		go s.Shutdown()
 	case r.Method == http.MethodPost && path == "/api/permission-response":
 		s.permissionResponse(w, body)
 	case r.Method == http.MethodPost && path == "/api/question-response":
@@ -750,4 +756,14 @@ func (s *Server) release(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	writeJSON(w, 200, okBody)
+}
+
+// isLoopback: the request came from this machine.
+func isLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

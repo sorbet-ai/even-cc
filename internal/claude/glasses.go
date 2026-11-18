@@ -13,7 +13,8 @@ var glassesRules string
 // without the user having to run /even. The same session opened at a desk
 // (another claude process) keeps normal formatting.
 func GlassesPrompt() string {
-	return "The user is reading this conversation on Even Realities G2 smart glasses through even-cc " +
-		"(Terminal Mode) and talking to you by voice. Write every reply for the glasses, following these rules.\n\n" +
+	return "The user is reading this conversation on Even Realities G2 smart glasses, in Faceclaw's " +
+		"Claude Code app (served by even-cc on their machine), and talking to you by voice. " +
+		"Write every reply for the glasses, following these rules.\n\n" +
 		glassesRules
 }

@@ -43,7 +43,10 @@ func usage() {
 	fmt.Fprint(os.Stderr, `even-cc `+Version+` — Claude Code on Even G2 glasses, through Faceclaw
 
 Usage:
-  even-cc [serve] [flags]          start the server (default)
+  even-cc [serve] [flags]          start the server in this terminal (default)
+  even-cc start [flags]            start it in the background and print the setup QR
+  even-cc stop                     stop the background server
+  even-cc status                   is the background server running?
   even-cc pair [--config path]     print the Faceclaw setup QR code
   even-cc config [--config path]   print the config (token masked)
   even-cc config <key>             print one key
@@ -64,6 +67,12 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = serve(args)
+	case "start":
+		err = startCmd(args)
+	case "stop":
+		err = stopCmd(args)
+	case "status":
+		err = statusCmd(args)
 	case "config":
 		err = configCmd(args)
 	case "pair":
@@ -487,6 +496,7 @@ func runServer(o *serveOpts) error {
 	mirrorSrv, mirrorHTTP, mirrorConn := startMirror(cfg, host, addrs, claudePath, env, log)
 	srv.Mirror = mirrorConn
 	printSetup(host, cfg.Port, cfg.Token, srv.Name, srv.STT != nil, srv.Mirror, o.noQR)
+	srv.Shutdown = stop
 
 	// SSE clears the read deadline and sets its own write deadlines.
 	httpSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
@@ -503,6 +513,10 @@ func runServer(o *serveOpts) error {
 		}()
 	}
 	log.Info("listening", "addrs", strings.Join(addrs, ","), "port", cfg.Port)
+	if os.Getenv(daemonEnv) == "1" { // started by `even-cc start`: tell it we're up
+		defer writeDaemonState(o.configPath, daemonState{Pid: os.Getpid(), Port: cfg.Port, Name: srv.Name,
+			STT: srv.STT != nil, Terminal: srv.Mirror, Log: logPath, StartedAt: time.Now()})()
+	}
 	if len(cfg.Token) < 16 {
 		log.Warn("the pairing token is short and could be guessed by anyone on the network; set a longer one with: even-cc config token <32 random hex chars>", "length", len(cfg.Token))
 	}
