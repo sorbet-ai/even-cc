@@ -67,11 +67,6 @@ type Display struct {
 	// AgentProgressWhileIdle sends background subagent updates between turns
 	// (the app then shows the session busy); off, they wait for the next turn.
 	AgentProgressWhileIdle bool `json:"agentProgressWhileIdle"`
-	// TalkWhileBusy reports the session idle while a main-agent tool runs
-	// (after TalkWhileBusyAfterSeconds), so the app offers hold-to-speak.
-	TalkWhileBusy bool `json:"talkWhileBusy"`
-	// TalkWhileBusyAfterSeconds is how long a tool must run before that.
-	TalkWhileBusyAfterSeconds float64 `json:"talkWhileBusyAfterSeconds"`
 }
 
 type Log struct {
@@ -144,9 +139,6 @@ func Default() Config {
 			SubagentProgress:        true,
 			SubagentProgressSeconds: 15,
 			Footer:                  true,
-
-			TalkWhileBusy:             true,
-			TalkWhileBusyAfterSeconds: 3,
 		},
 		Log: Log{Level: "info"},
 	}
@@ -213,9 +205,6 @@ func (c *Config) Validate() error {
 	if c.Display.SubagentProgressSeconds < 0 {
 		return fmt.Errorf("display.subagentProgressSeconds must be >= 0")
 	}
-	if c.Display.TalkWhileBusyAfterSeconds < 0 {
-		return fmt.Errorf("display.talkWhileBusyAfterSeconds must be >= 0")
-	}
 	if c.Log.DebugFile != "" { // deprecated key
 		if c.Log.File == "" {
 			c.Log.File = c.Log.DebugFile
@@ -229,40 +218,15 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// retiredKeys are top-level keys of features that were removed (the hub/join
-// mode). A config file that still has them loads; they are ignored and
-// dropped the next time the file is saved.
-var retiredKeys = []string{"hub", "join", "allowCors"}
-
-// dropRetired removes retiredKeys from a JSON object, if any are present.
-func dropRetired(b []byte) []byte {
-	var root map[string]json.RawMessage
-	if json.Unmarshal(b, &root) != nil {
-		return b // let the strict decoder report the error
-	}
-	found := false
-	for _, k := range retiredKeys {
-		if _, ok := root[k]; ok {
-			delete(root, k)
-			found = true
-		}
-	}
-	if !found {
-		return b
-	}
-	out, err := json.Marshal(root)
-	if err != nil {
-		return b
-	}
-	return out
-}
-
-// decodeStrict unmarshals JSON on top of defaults, rejecting unknown keys
-// (except retiredKeys, which are ignored).
-func decodeStrict(b []byte) (Config, error) {
+// decode unmarshals JSON on top of defaults. A config file may hold keys of
+// removed features (hub/join, talk while busy, ...): Load ignores unknown
+// keys, and they drop out the next time the file is saved. Set is strict.
+func decode(b []byte, strict bool) (Config, error) {
 	c := Default()
-	dec := json.NewDecoder(bytes.NewReader(dropRetired(b)))
-	dec.DisallowUnknownFields()
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(&c); err != nil {
 		return c, err
 	}
@@ -275,7 +239,7 @@ func decodeStrict(b []byte) (Config, error) {
 func Load(path, importFrom string) (cfg Config, created bool, err error) {
 	b, err := os.ReadFile(path)
 	if err == nil {
-		cfg, err = decodeStrict(b)
+		cfg, err = decode(b, false)
 		if err != nil {
 			return cfg, false, fmt.Errorf("%s: %w", path, err)
 		}
@@ -385,7 +349,7 @@ func Set(cfg Config, key, value string) (Config, error) {
 	}
 	node[last] = v
 	nb, _ := json.Marshal(root)
-	out, err := decodeStrict(nb)
+	out, err := decode(nb, true)
 	if err != nil {
 		return cfg, fmt.Errorf("%s=%s: %w", key, value, err)
 	}

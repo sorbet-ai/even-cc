@@ -31,11 +31,6 @@ type Display struct {
 	// AgentProgressWhileIdle sends background subagent updates between
 	// turns too; off, they wait for the next turn.
 	AgentProgressWhileIdle bool
-	// TalkWhileBusy sends status idle while a main-agent tool has run for
-	// TalkWhileBusyAfter (no permission/question pending, no text streaming),
-	// so the app lets the user speak; busy is re-sent before more output.
-	TalkWhileBusy      bool
-	TalkWhileBusyAfter time.Duration
 }
 
 // ClassicDisplay reproduces even-terminal's output exactly.
@@ -58,8 +53,6 @@ func DisplayFromConfig(d config.Display) Display {
 		Footer:           d.Footer,
 
 		AgentProgressWhileIdle: d.AgentProgressWhileIdle,
-		TalkWhileBusy:          d.TalkWhileBusy,
-		TalkWhileBusyAfter:     time.Duration(d.TalkWhileBusyAfterSeconds * float64(time.Second)),
 	}
 }
 
@@ -121,13 +114,7 @@ type Mapper struct {
 	ctxModel   string
 	ctxWindows map[string]int64 // contextWindow per model (from result modelUsage)
 	active     bool             // a turn is running (busy was sent)
-	// quiet: the app was told idle mid-turn (talk while busy); subagent
-	// updates are held until busy is sent again.
-	quiet bool
 }
-
-// Streaming reports whether a text or thinking block is open.
-func (m *Mapper) Streaming() bool { return m.blockType != "" }
 
 func NewMapper(emit func(ev any), status func(state string), disp func() Display) *Mapper {
 	return &Mapper{emit: emit, status: status, disp: disp, calls: map[string]*toolCall{}, denied: map[string]bool{},

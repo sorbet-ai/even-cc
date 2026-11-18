@@ -3,7 +3,6 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 
 const eccTitle = "even-cc"
 
-const eccHelp = "/ecc mode default|auto|plan|acceptEdits · model <name|default> · tools full|collapsed|hidden · thinking on|off · agents on|off · footer on|off · busy on|off · stop · status"
+const eccHelp = "/ecc mode default|auto|plan|acceptEdits · model <name|default> · tools full|collapsed|hidden · thinking on|off · agents on|off · footer on|off · stop · status"
 
 var eccModes = map[string]bool{"default": true, "auto": true, "plan": true, "acceptEdits": true}
 
@@ -78,16 +77,6 @@ func (m *Manager) ecc(sessionID, args string) (string, error) {
 			reply("Reply footer: " + on)
 		}
 		m.SetDisplay(d)
-	case "busy":
-		on := strings.ToLower(arg)
-		if on != "on" && on != "off" {
-			reply("Usage: /ecc busy on|off")
-			break
-		}
-		d := m.Display()
-		d.TalkWhileBusy = on == "on"
-		m.SetDisplay(d)
-		reply("Talk while busy: " + on)
 	case "stop":
 		if s == nil {
 			return "", &HTTPError{Code: 400, Msg: "/ecc stop needs a sessionId"}
@@ -118,7 +107,7 @@ func (m *Manager) ecc(sessionID, args string) (string, error) {
 	case "status":
 		if s == nil {
 			d := m.Display()
-			reply(fmt.Sprintf("tools %s · thinking %v · agents %s · footer %s · %s", d.Tools, d.Thinking, onOff(d.SubagentProgress), onOff(d.Footer), talkText(d)))
+			reply(fmt.Sprintf("tools %s · thinking %v · agents %s · footer %s", d.Tools, d.Thinking, onOff(d.SubagentProgress), onOff(d.Footer)))
 			break
 		}
 		reply(s.statusText())
@@ -224,27 +213,16 @@ func (s *Session) statusText() string {
 		proc = fmt.Sprintf("warm pid %d", s.proc.Pid())
 	}
 	state := s.stateLocked()
-	if s.talkIdle {
-		state = "busy (shown idle: talk while busy)"
-	}
 	mode := s.permMode
 	if mode == "" {
 		mode = "from settings"
 	}
-	text := fmt.Sprintf("%s · mode %s · %s · %s · bg tasks %d · tools %s · thinking %v · agents %s · footer %s · %s",
-		state, mode, model, proc, len(s.bgTasks), d.Tools, d.Thinking, onOff(d.SubagentProgress), onOff(d.Footer), talkText(d))
+	text := fmt.Sprintf("%s · mode %s · %s · %s · bg tasks %d · tools %s · thinking %v · agents %s · footer %s",
+		state, mode, model, proc, len(s.bgTasks), d.Tools, d.Thinking, onOff(d.SubagentProgress), onOff(d.Footer))
 	if n := guard.Panics.Load(); n > 0 {
 		text += fmt.Sprintf(" · %d internal errors (see log)", n)
 	}
 	return text
-}
-
-// talkText: "talk while busy on (3s)" / "talk while busy off".
-func talkText(d Display) string {
-	if !d.TalkWhileBusy {
-		return "talk while busy off"
-	}
-	return "talk while busy on (" + strconv.FormatFloat(d.TalkWhileBusyAfter.Seconds(), 'f', -1, 64) + "s)"
 }
 
 // stop interrupts the running turn (/ecc stop); false between turns.
@@ -254,8 +232,7 @@ func (s *Session) stop() bool {
 	if !s.busy {
 		return false
 	}
-	s.log.Info("/ecc stop, interrupting", "appIdle", s.talkIdle)
-	s.talkWakeLocked("stop")
+	s.log.Info("/ecc stop, interrupting")
 	s.interruptLocked()
 	return true
 }

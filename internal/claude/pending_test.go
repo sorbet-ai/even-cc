@@ -10,16 +10,118 @@ import (
 	"even-cc/internal/guard"
 )
 
-// Prompts, answers, interrupts and process exits around a pending
-// AskUserQuestion / permission request, including the 2026-10-30 incident:
-// a long Bash with talk-while-busy, backgrounded by the CLI, then a question
-// the glasses never showed, then a prompt sent instead of an answer.
+// Prompts mid-turn, and prompts, answers, interrupts and process exits
+// around a pending AskUserQuestion / permission request, including the
+// 2026-10-30 incident: a long Bash, backgrounded by the CLI, then a question
+// the glasses never showed, then a prompt sent instead of an answer. The CLI
+// sequences are shaped like 2.1.312 output for a main-agent Bash call.
+
+type turnHarness struct{ *harness }
+
+func newTurnHarness(t *testing.T) *turnHarness {
+	h := &turnHarness{newHarness(t, DisplayFromConfigDefaults())}
+	h.prompt("run the loop")
+	h.waitLaunch()
+	h.feed([]byte(`{"type":"system","subtype":"session_state_changed","state":"running"}`))
+	return h
+}
+
+func (h *turnHarness) se(ev string) {
+	h.feed([]byte(`{"type":"stream_event","event":` + ev + `,"parent_tool_use_id":null}`))
+}
+
+// bash: the model streams a Bash tool_use; the CLI then executes it.
+func (h *turnHarness) bash(id string) {
+	h.se(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"` + id + `","name":"Bash","input":{}}}`)
+	h.se(`{"type":"content_block_stop","index":0}`)
+	h.feed([]byte(`{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"` + id + `","name":"Bash","input":{"command":"for i in 1 2 3 4; do date; sleep 5; done","description":"Print the date 4 times"}}]},"parent_tool_use_id":null}`))
+	h.se(`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":40}}`)
+	h.se(`{"type":"message_stop"}`)
+}
+
+func (h *turnHarness) bashResult(id string) {
+	h.feed([]byte(`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"` + id + `","type":"tool_result","content":"Thu Oct 30\nThu Oct 30","is_error":false}]},"parent_tool_use_id":null}`))
+}
+
+func (h *turnHarness) reply(text string) {
+	h.se(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+	h.se(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + `"}}`)
+	h.se(`{"type":"content_block_stop","index":0}`)
+	h.feed([]byte(`{"type":"result","subtype":"success","result":"` + text + `","num_turns":2,"session_id":"x"}`))
+	h.feed([]byte(`{"type":"system","subtype":"session_state_changed","state":"idle"}`))
+}
+
+func (h *turnHarness) sig() string { return strings.Join(signature(h.events()), " ") }
+
+func (h *turnHarness) userLines() []string {
+	var out []string
+	for _, s := range h.cur.proc.sentLines() {
+		if strings.Contains(s, `"type":"user"`) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// A prompt during a long tool goes to the CLI, which folds it into the
+// turn; the session stays busy throughout.
+func TestMidTurnPromptForwarded(t *testing.T) {
+	h := newTurnHarness(t)
+	h.bash("tb1")
+	time.Sleep(50 * time.Millisecond)
+	if st := h.m.StatusOf(h.sid); st != "busy" {
+		t.Errorf("state during the tool %s", st)
+	}
+	h.prompt("also tell me the current year")
+	users := h.userLines()
+	if len(users) != 2 || !strings.Contains(users[1], `"content":"also tell me the current year"`) {
+		t.Fatalf("mid-turn prompt not written to the CLI: %v", users)
+	}
+	h.bashResult("tb1")
+	h.reply("Done. It is 2026.")
+	wantSig(t, signature(h.events()), "user_prompt busy tool_start:Bash user_prompt tool_end:Bash text_start text_delta+ text_end result:ok idle")
+}
+
+func TestStopWordInterrupts(t *testing.T) {
+	for _, word := range []string{"Stop.", "stop it!", "  CANCEL ", "Halt", "/ecc stop"} {
+		h := newTurnHarness(t)
+		h.bash("tb1")
+		h.prompt(word)
+		h.cur.proc.mu.Lock()
+		reqs := strings.Join(h.cur.proc.reqs, ",")
+		h.cur.proc.mu.Unlock()
+		if !strings.Contains(reqs, "interrupt") {
+			t.Errorf("%q: no interrupt (requests %s)", word, reqs)
+		}
+		if n := len(h.userLines()); n != 1 {
+			t.Errorf("%q forwarded to claude (%d user lines)", word, n)
+		}
+		h.bashResult("tb1")
+		h.feed([]byte(`{"type":"result","subtype":"error_during_execution","terminal_reason":"aborted_tools","num_turns":1,"session_id":"x"}`))
+		h.feed([]byte(`{"type":"system","subtype":"session_state_changed","state":"idle"}`))
+		want := "user_prompt busy tool_start:Bash user_prompt tool_end:Bash result:fail idle"
+		if word == "/ecc stop" { // a server command: notification, no user_prompt
+			want = "user_prompt busy tool_start:Bash notification tool_end:Bash result:fail idle"
+		}
+		wantSig(t, signature(h.events()), want)
+	}
+}
+
+func TestIsStopWord(t *testing.T) {
+	for text, want := range map[string]bool{
+		"stop": true, "Stop.": true, "STOP IT!!": true, "stop  it": true, "cancel…": true, "halt?": true,
+		"stop the tests": false, "don't stop": false, "": false, "stopped": false,
+	} {
+		if got := isStopWord(text); got != want {
+			t.Errorf("%q: %v want %v", text, got, want)
+		}
+	}
+}
 
 const askReq = `{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which one?","header":"Pick","options":[{"label":"A","description":"a"},{"label":"B","description":"b"}],"multiSelect":false}]},"tool_use_id":"tq1"}}`
 
-func (h *talkHarness) incidentUpToQuestion() {
+func (h *turnHarness) incidentUpToQuestion() {
 	h.bash("tb1")
-	h.waitSig("tool_start:Bash idle")
 	h.feed([]byte(`{"type":"system","subtype":"task_started","task_id":"bi841l8z0","tool_use_id":"tb1","description":"Print the date","task_type":"local_bash"}`))
 	h.feed([]byte(`{"type":"system","subtype":"task_notification","task_id":"bi841l8z0","tool_use_id":"tb1","status":"completed","summary":"done"}`))
 	h.bashResult("tb1")
@@ -48,7 +150,7 @@ func (h *harness) controlResponses() []map[string]any {
 }
 
 func TestPromptAnswersPendingQuestion(t *testing.T) {
-	h := newTalkHarness(t, talkDisplay())
+	h := newTurnHarness(t)
 	h.incidentUpToQuestion()
 	h.prompt("Are you seeing any of this?")
 	if n := len(h.userLines()); n != 1 {
@@ -65,9 +167,9 @@ func TestPromptAnswersPendingQuestion(t *testing.T) {
 	if st := h.m.StatusOf(h.sid); st != "busy" {
 		t.Errorf("state after the answer %s", st)
 	}
-	wantSig(t, signature(h.events()), "user_prompt busy tool_start:Bash idle busy tool_end:Bash text_start text_delta+ text_end tool_start:AskUserQuestion user_question user_prompt question_answer")
+	wantSig(t, signature(h.events()), "user_prompt busy tool_start:Bash tool_end:Bash text_start text_delta+ text_end tool_start:AskUserQuestion user_question user_prompt question_answer")
 	// JSON-looking text stays text
-	h2 := newTalkHarness(t, talkDisplay())
+	h2 := newTurnHarness(t)
 	h2.incidentUpToQuestion()
 	h2.prompt("42")
 	if a := h2.controlResponses()[0]["updatedInput"].(map[string]any)["answers"]; a.(map[string]any)["Which one?"] != "42" {
@@ -76,7 +178,7 @@ func TestPromptAnswersPendingQuestion(t *testing.T) {
 }
 
 func TestPromptDeniesPendingPermission(t *testing.T) {
-	h := newTalkHarness(t, talkDisplay())
+	h := newTurnHarness(t)
 	h.bash("tb1")
 	h.feed([]byte(`{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf build"},"tool_use_id":"tb1"}}`))
 	h.prompt("no, keep the build dir")
@@ -98,7 +200,7 @@ func TestPromptDeniesPendingPermission(t *testing.T) {
 }
 
 func TestStopWordWithPendingQuestionInterrupts(t *testing.T) {
-	h := newTalkHarness(t, talkDisplay())
+	h := newTurnHarness(t)
 	h.incidentUpToQuestion()
 	h.prompt("stop")
 	h.cur.proc.mu.Lock()
@@ -116,7 +218,7 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 // The app's reactions to a question, each ending in a clean turn.
 func TestQuestionAppReactions(t *testing.T) {
-	end := func(h *talkHarness) {
+	end := func(h *turnHarness) {
 		h.feed([]byte(`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"tq1","type":"tool_result","content":"answered"}]},"parent_tool_use_id":null}`))
 		h.reply("Ok.")
 		if st := h.m.StatusOf(h.sid); st != "idle" {
@@ -124,20 +226,20 @@ func TestQuestionAppReactions(t *testing.T) {
 		}
 	}
 	t.Run("skip", func(t *testing.T) {
-		h := newTalkHarness(t, talkDisplay())
+		h := newTurnHarness(t)
 		h.incidentUpToQuestion()
 		h.m.Lookup(h.sid).RespondQuestion("skip")
 		h.m.Lookup(h.sid).RespondQuestion("late duplicate") // nothing pending: dropped
 		end(h)
 	})
 	t.Run("empty", func(t *testing.T) {
-		h := newTalkHarness(t, talkDisplay())
+		h := newTurnHarness(t)
 		h.incidentUpToQuestion()
 		h.m.Lookup(h.sid).RespondQuestion("")
 		end(h)
 	})
 	t.Run("interrupt", func(t *testing.T) {
-		h := newTalkHarness(t, talkDisplay())
+		h := newTurnHarness(t)
 		h.incidentUpToQuestion()
 		h.m.Lookup(h.sid).Interrupt()
 		h.m.Lookup(h.sid).Interrupt() // twice
@@ -149,7 +251,7 @@ func TestQuestionAppReactions(t *testing.T) {
 		}
 	})
 	t.Run("cli cancels", func(t *testing.T) {
-		h := newTalkHarness(t, talkDisplay())
+		h := newTurnHarness(t)
 		h.incidentUpToQuestion()
 		h.feed([]byte(`{"type":"control_cancel_request","request_id":"req-q"}`))
 		h.m.Lookup(h.sid).RespondQuestion("A")
@@ -159,7 +261,7 @@ func TestQuestionAppReactions(t *testing.T) {
 		end(h)
 	})
 	t.Run("process exits", func(t *testing.T) {
-		h := newTalkHarness(t, talkDisplay())
+		h := newTurnHarness(t)
 		h.incidentUpToQuestion()
 		h.cur.proc.mu.Lock()
 		h.cur.proc.code = 143
@@ -186,9 +288,9 @@ func TestQuestionAppReactions(t *testing.T) {
 }
 
 // Everything at once, for the race detector: CLI output, prompts, answers,
-// interrupts and SSE clients on one session.
+// interrupts and WebSocket clients on one session.
 func TestPendingConcurrentNoRace(t *testing.T) {
-	h := newTalkHarness(t, talkDisplay())
+	h := newTurnHarness(t)
 	h.incidentUpToQuestion()
 	s := h.m.Lookup(h.sid)
 	var wg sync.WaitGroup
@@ -235,7 +337,7 @@ func TestPendingConcurrentNoRace(t *testing.T) {
 // A panic while handling a CLI line is recovered: the session's lock is
 // released and later lines and prompts still work.
 func TestCLILinePanicRecovered(t *testing.T) {
-	h := newTalkHarness(t, talkDisplay())
+	h := newTurnHarness(t)
 	s := h.m.Lookup(h.sid)
 	s.mu.Lock()
 	saved := s.mapper

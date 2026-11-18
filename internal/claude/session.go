@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"even-cc/internal/events"
 	"even-cc/internal/guard"
@@ -108,12 +109,6 @@ type Session struct {
 	usageBase map[string]modelUsage
 
 	agentTicker bool // a goroutine refreshes subagent lines
-
-	// Talk while busy (talk.go).
-	talkIdle  bool            // status idle sent mid-turn; the app thinks the turn ended
-	talkTimer *time.Timer     // armed while a tool runs with nothing else going on
-	talkTools map[string]bool // main-agent tools executing (tool_use seen, no tool_result)
-	talkUsed  map[string]bool // tools that already had their idle/busy pair
 }
 
 func newSession(m *Manager, id, cwd string) *Session {
@@ -130,12 +125,8 @@ func newSession(m *Manager, id, cwd string) *Session {
 	return s
 }
 
-// emit sends an event to the app (s.mu held). While the app was told idle
-// mid-turn (talk while busy), busy is re-sent first.
-func (s *Session) emit(ev any) {
-	s.talkGateLocked(ev)
-	s.m.hub.Emit(s.id, ev)
-}
+// emit sends an event to the app (s.mu held).
+func (s *Session) emit(ev any)              { s.m.hub.Emit(s.id, ev) }
 func (s *Session) emitStatus(state string)  { s.emit(events.NewStatus(state, s.id)) }
 func (s *Session) notify(title, msg string) { s.emit(events.NewNotification(title, msg)) }
 
@@ -150,7 +141,7 @@ func (s *Session) stateLocked() string {
 	if len(s.perms) > 0 || len(s.questions) > 0 {
 		return "awaiting"
 	}
-	if s.busy && !s.talkIdle { // what the app was told
+	if s.busy {
 		return "busy"
 	}
 	return "idle"
@@ -172,10 +163,9 @@ func (s *Session) Submit(text string) {
 		return
 	}
 	if isStopWord(text) {
-		// Spoken "stop" while a turn runs (the app showed idle during a long
-		// tool): stop the turn instead of telling Claude.
-		s.log.Info("stop word mid-turn, interrupting", "text", text, "appIdle", s.talkIdle)
-		s.talkWakeLocked("stop word")
+		// Spoken "stop" while a turn runs: stop the turn instead of telling
+		// Claude.
+		s.log.Info("stop word mid-turn, interrupting", "text", text)
 		s.interruptLocked()
 		return
 	}
@@ -184,11 +174,7 @@ func (s *Session) Submit(text string) {
 		s.log.Info("prompt queued", "queue", len(s.queue))
 		return
 	}
-	s.log.Info("prompt sent mid-turn", "pid", s.proc.Pid(), "appIdle", s.talkIdle, "text", truncEllipsis(text, 80))
-	// The app showed idle so the user could talk; it sent this prompt and
-	// now gets busy as after any prompt (user_prompt → busy).
-	s.talkWakeLocked("prompt")
-	defer s.talkUpdateLocked()
+	s.log.Info("prompt sent mid-turn", "pid", s.proc.Pid(), "text", truncEllipsis(text, 80))
 	s.resultPending = false // more output is coming
 	s.sentSinceResult = true
 	if s.resultSent {
@@ -222,7 +208,6 @@ func (s *Session) answerPendingWithPromptLocked(text string) bool {
 			s.removeQuestionLocked(pq)
 			s.log.Info("prompt answers the pending question", "text", truncEllipsis(text, 80))
 			s.finishQuestionWithLocked(pq, textAnswers(text, pq.questions), true)
-			s.talkUpdateLocked()
 			return true
 		}
 	}
@@ -231,7 +216,6 @@ func (s *Session) answerPendingWithPromptLocked(text string) bool {
 			s.removePermLocked(pp)
 			s.log.Info("prompt denies the pending permission request", "tool", pp.toolName, "text", truncEllipsis(text, 80))
 			s.finishPermMessageLocked(pp, "deny", "The user didn't answer this permission request and said instead: "+text, true)
-			s.talkUpdateLocked()
 			return true
 		}
 	}
@@ -250,7 +234,6 @@ func (s *Session) resetTurnLocked() {
 	s.sentSinceResult = false
 	s.resultSent = false
 	s.mapper.ResetTurn()
-	s.talkResetLocked()
 	s.clearIdleTimerLocked()
 	s.startStatsLocked()
 }
@@ -415,7 +398,7 @@ func (s *Session) startStatsLocked() {
 				s.mu.Unlock()
 				return
 			}
-			if s.resultSent || s.talkIdle { // never after the result, nor while the app was told idle
+			if s.resultSent { // never after the result
 				s.mu.Unlock()
 				continue
 			}
@@ -487,7 +470,6 @@ func (s *Session) finishTurnLocked() {
 	s.busy = false
 	s.turnSeq++
 	s.resultPending = false
-	s.talkResetLocked()
 	s.keepPendingForSubagentsLocked()
 	s.mapper.SetActive(false)
 	if s.proc != nil {
@@ -567,7 +549,6 @@ func (s *Session) onLine(gen int, line []byte) {
 	if gen != s.gen || s.proc == nil {
 		return // output of a process we already replaced, or that exited
 	}
-	defer s.talkUpdateLocked()
 	p := s.proc
 	switch msg.Type {
 	case "control_request":
@@ -614,16 +595,6 @@ func (s *Session) onLine(gen int, line []byte) {
 	// subagent keeps streaming (parent_tool_use_id set) after the turn's
 	// result, and the CLI then stays "running" with no idle until it ends.
 	main := parentID == ""
-	if main && s.talkIdle {
-		switch msg.Type {
-		case "stream_event", "assistant", "result":
-			s.talkWakeLocked(msg.Type)
-		case "user":
-			if !msg.IsReplay {
-				s.talkWakeLocked("tool result")
-			}
-		}
-	}
 	switch msg.Type {
 	case "stream_event", "assistant":
 		if main {
@@ -664,7 +635,6 @@ func (s *Session) onLine(gen int, line []byte) {
 		if json.Unmarshal(msg.Message, &m) == nil {
 			if parentID == "" {
 				s.mapper.SetMainModel(m.Model)
-				s.talkToolsStartedLocked(m.Content)
 			}
 			s.mapper.Assistant(m.Content, parentID)
 		}
@@ -680,9 +650,6 @@ func (s *Session) onLine(gen int, line []byte) {
 		}
 		var blocks []contentBlock
 		if json.Unmarshal(m.Content, &blocks) == nil {
-			if parentID == "" {
-				s.talkToolsEndedLocked(blocks)
-			}
 			s.mapper.ToolResults(blocks)
 		}
 	case "result":
@@ -961,8 +928,6 @@ func (s *Session) handleControlRequestLocked(p procHandle, msg cliMsg) {
 	}
 	switch req.Subtype {
 	case "can_use_tool":
-		// While shown idle (talk while busy), a prompt that reaches the app
-		// gets busy first (emit gate); auto-allowed requests stay silent.
 		s.ensureBusyLocked()
 		s.handleCanUseToolLocked(p, msg.RequestID, req.ToolName, req.Input, req.ToolUseID, req.Suggestions, s.busy && req.AgentID == "")
 	case "hook_callback":
@@ -1043,7 +1008,6 @@ func (s *Session) handleCanUseToolLocked(p procHandle, reqID, tool string, input
 		if s.removePermLocked(pp) {
 			s.log.Info("permission timed out", "tool", tool)
 			s.finishPermLocked(pp, "deny", true)
-			s.talkUpdateLocked()
 		}
 	})
 }
@@ -1151,7 +1115,6 @@ func (s *Session) RespondPermission(decision string) bool {
 	s.perms = s.perms[1:]
 	s.log.Info("permission answered", "tool", pp.toolName, "decision", decision)
 	s.finishPermLocked(pp, decision, true)
-	s.talkUpdateLocked()
 	return true
 }
 
@@ -1198,7 +1161,6 @@ func (s *Session) askQuestionLocked(p procHandle, reqID string, input json.RawMe
 		if s.removeQuestionLocked(pq) {
 			s.log.Info("question timed out")
 			s.finishQuestionLocked(pq, "skip", true)
-			s.talkUpdateLocked()
 		}
 	})
 }
@@ -1296,7 +1258,6 @@ func (s *Session) RespondQuestion(answer string) {
 	pq := s.questions[0]
 	s.questions = s.questions[1:]
 	s.finishQuestionLocked(pq, answer, true)
-	s.talkUpdateLocked()
 }
 
 // cancelRequestLocked: the CLI withdrew a can_use_tool request.
@@ -1380,7 +1341,6 @@ func (s *Session) interruptLocked() {
 		return
 	}
 	s.interrupted = true
-	s.talkStopTimerLocked()
 	var wait func(time.Duration) (json.RawMessage, error)
 	if p != nil && !s.launching {
 		wait = p.StartRequest("interrupt", nil)
@@ -1403,7 +1363,6 @@ func (s *Session) close() {
 	s.gen++
 	s.proc = nil
 	s.clearIdleTimerLocked()
-	s.talkStopTimerLocked()
 	s.dropPendingLocked("shutdown")
 	s.mu.Unlock()
 	if p != nil {
@@ -1458,6 +1417,17 @@ func (s *Session) health() SessionHealth {
 		h.Pid = s.proc.Pid()
 	}
 	return h
+}
+
+// isStopWord: the whole prompt is "stop", "cancel", "stop it" or "halt"
+// (any case, surrounding spaces and trailing punctuation ignored).
+func isStopWord(text string) bool {
+	t := strings.TrimRightFunc(strings.ToLower(text), func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSpace(r) })
+	switch strings.Join(strings.Fields(t), " ") {
+	case "stop", "cancel", "stop it", "halt":
+		return true
+	}
+	return false
 }
 
 // redundantNotice reports a Claude Code notification that only says a

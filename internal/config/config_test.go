@@ -60,26 +60,30 @@ func TestLoadCreateImportAndSet(t *testing.T) {
 	if len(c2.Token) != 32 {
 		t.Errorf("token %q", c2.Token)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "bad.json"), []byte(`{"version":1,"unknown":1}`), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "bad.json"), []byte(`{"version":1,"port":0}`), 0o600)
 	if _, _, err := Load(filepath.Join(dir, "bad.json"), ""); err == nil {
-		t.Error("unknown key in file accepted")
+		t.Error("invalid value in file accepted")
 	}
 }
 
-func TestRetiredHubJoinKeysIgnored(t *testing.T) {
+// Keys of removed features (hub/join mode, talk while busy) are ignored,
+// not settable or readable, and drop out on save.
+func TestRemovedKeysIgnored(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.json")
-	// a config written while the hub/join mode existed still loads
 	_ = os.WriteFile(p, []byte(`{"version":1,"port":3456,"token":"0123456789abcdef0123456789abcdef","claudeDir":"/c",
 "hub":{"enabled":true,"joinCode":"K7Q4MD","tagLocal":false,"members":[{"name":"win","credentialHash":"ab","joinedAt":"x"}]},
-"join":{"hub":"http://h:3456","credential":"cred","name":"home"}}`), 0o600)
+"join":{"hub":"http://h:3456","credential":"cred","name":"home"},"allowCors":false,
+"display":{"tools":"hidden","talkWhileBusy":true,"talkWhileBusyAfterSeconds":3}}`), 0o600)
 	cfg, wrote, err := Load(p, "")
-	if err != nil || wrote || cfg.Token != "0123456789abcdef0123456789abcdef" || cfg.ClaudeDir != "/c" {
+	if err != nil || wrote || cfg.Token != "0123456789abcdef0123456789abcdef" || cfg.ClaudeDir != "/c" || cfg.Display.Tools != "hidden" {
 		t.Fatalf("%v %v %+v", err, wrote, cfg)
 	}
-	// they are not settable or readable any more, and drop out on save
 	if _, err := Set(cfg, "hub.joinCode", "K7Q4MD"); err == nil {
 		t.Error("hub.joinCode accepted")
+	}
+	if _, err := Set(cfg, "display.talkWhileBusy", "true"); err == nil {
+		t.Error("display.talkWhileBusy accepted")
 	}
 	if _, err := Get(cfg, "join.hub"); err == nil {
 		t.Error("join.hub readable")
@@ -88,13 +92,8 @@ func TestRetiredHubJoinKeysIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(p)
-	if strings.Contains(string(b), `"hub"`) || strings.Contains(string(b), `"join"`) {
-		t.Errorf("retired keys saved: %s", b)
-	}
-	// other unknown keys are still rejected
-	_ = os.WriteFile(p, []byte(`{"version":1,"hub":{},"bogus":1}`), 0o600)
-	if _, _, err := Load(p, ""); err == nil {
-		t.Error("unknown key accepted next to a retired one")
+	if strings.Contains(string(b), `"hub"`) || strings.Contains(string(b), `"join"`) || strings.Contains(string(b), "talkWhileBusy") {
+		t.Errorf("removed keys saved: %s", b)
 	}
 }
 

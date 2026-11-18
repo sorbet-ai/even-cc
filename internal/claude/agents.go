@@ -262,11 +262,10 @@ func (m *Mapper) emitAgent(a *agentLine, force bool) {
 		o := capOutput(*a.output, d.MaxOutput)
 		ev.Detail.Output = &o
 	}
-	if m.quiet || (!m.active && a.background && !d.AgentProgressWhileIdle) {
-		// Between turns (or while the app was told idle mid-turn so the user
-		// can talk) the app must see nothing: any event makes it show the
-		// session as busy again and lock input. The latest state goes out
-		// when busy is next sent (usually Claude's report on it).
+	if !m.active && a.background && !d.AgentProgressWhileIdle {
+		// Between turns the app must see nothing: any event makes it show the
+		// session as busy again. The latest state goes out when busy is next
+		// sent (usually Claude's report on it).
 		a.held = true
 		return
 	}
@@ -278,9 +277,6 @@ func (m *Mapper) emitAgent(a *agentLine, force bool) {
 
 // SetActive tells the mapper whether a turn is running (busy was sent).
 func (m *Mapper) SetActive(on bool) { m.active = on }
-
-// SetQuiet holds every subagent update (talk-while-busy idle).
-func (m *Mapper) SetQuiet(on bool) { m.quiet = on }
 
 // FlushHeld sends what was withheld while idle: finished lines at once,
 // running ones when an update is due.
