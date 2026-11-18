@@ -1,0 +1,12 @@
+{"type":"status","state":"busy","sessionId":"3c1986cb-f850-4cef-adf2-33626c33ac82","provider":"claude"}
+{"type":"status","state":"busy","sessionId":"b9f3dc0c-7bdb-4174-bf79-cf29f9a53f30","provider":"claude"}
+{"type":"status","state":"think_start","sessionId":"3c1986cb-f850-4cef-adf2-33626c33ac82","provider":"claude"}
+{"type":"status","state":"think_start","sessionId":"b9f3dc0c-7bdb-4174-bf79-cf29f9a53f30","provider":"claude"}
+{"type":"status","state":"think_end","sessionId":"3c1986cb-f850-4cef-adf2-33626c33ac82","provider":"claude"}
+{"type":"status","state":"think_end","sessionId":"b9f3dc0c-7bdb-4174-bf79-cf29f9a53f30","provider":"claude"}
+{"type":"status","state":"text_start","sessionId":"3c1986cb-f850-4cef-adf2-33626c33ac82","provider":"claude"}
+{"type":"status","state":"text_start","sessionId":"b9f3dc0c-7bdb-4174-bf79-cf29f9a53f30","provider":"claude"}
+{"type":"status","state":"text_end","sessionId":"3c1986cb-f850-4cef-adf2-33626c33ac82","provider":"claude"}
+{"type":"status","state":"text_end","sessionId":"b9f3dc0c-7bdb-4174-bf79-cf29f9a53f30","provider":"claude"}
+{"type":"status","state":"idle","sessionId":"3c1986cb-f850-4cef-adf2-33626c33ac82","provider":"claude"}
+{"type":"status","state":"idle","sessionId":"b9f3dc0c-7bdb-4174-bf79-cf29f9a53f30","provider":"claude"}

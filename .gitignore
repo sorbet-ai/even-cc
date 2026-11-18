@@ -1,0 +1,5 @@
+bin/
+*.log
+.test/
+transcript-wsl-session.jsonl
+session.md

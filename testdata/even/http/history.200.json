@@ -1,0 +1,1 @@
+{"history":[{"role":"user","text":"Can you review the websocket reconnect logic?"},{"role":"assistant","text":"I've started a review of the reconnect code. It runs in the background; I'll report when it's done."},{"role":"user","text":"Okay. What did it find?"},{"role":"assistant","text":"Two issues: the retry timer is never cleared, and a dropped socket is reported twice."}]}

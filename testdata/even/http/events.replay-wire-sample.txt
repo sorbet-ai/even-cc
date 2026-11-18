@@ -1,0 +1,20 @@
+:ok
+
+id: 1115
+data: {"type":"text_delta","text":", and the w"}
+
+id: 1116
+data: {"type":"text_delta","text":"ording and"}
+
+id: 1117
+data: {"type":"text_delta","text":" number of the"}
+
+id: 1118
+data: {"type":"text_delta","text":" choices "}
+
+id: 1119
+data: {"type":"text_delta","text":"(\"Yes\""}
+
+id: 1120
+data: {"type":"text_delta","text":" / \"Y"}
+

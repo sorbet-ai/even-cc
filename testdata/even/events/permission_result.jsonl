@@ -1,0 +1,2 @@
+{"type":"permission_result","toolName":"Edit","summary":"Edit settings.json ~1 lines","decision":"allowed"}
+{"type":"permission_result","toolName":"Bash","summary":"Bash Copy this session and start a profiled test server","decision":"allowed"}

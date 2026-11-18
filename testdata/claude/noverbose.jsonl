@@ -1,0 +1,4 @@
+{"t":0,"dir":"note","data":{"argv":["/home/user/.nvm/versions/node/v24.22.1/bin/claude","--output-format","stream-json","--input-format","stream-json"],"env":["HOME","PATH","USER","LANG"],"cwd":"/home/user/even-cc/.test/cli-probe/work"}}
+{"t":4,"dir":"send","data":{"type":"user","message":{"role":"user","content":"Reply OK"},"parent_tool_use_id":null}}
+{"t":648,"dir":"stderr","data":"Error: When using --print, --output-format=stream-json requires --verbose\n"}
+{"t":1261,"dir":"exit","data":{"code":1,"signal":null}}
